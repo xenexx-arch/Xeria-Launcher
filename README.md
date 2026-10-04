@@ -12,3 +12,27 @@ Supports .mrpack import + export and all modloaders and ETC. general features
 Currently thats it, i will do an update ~ a week, there isnt any logo yet (Coded with AI for ~3 days on the 1st release) Expect alot of bugs. Made for Linux (primarily) and Windows.
 
 !! THERE IS NO REQUIREMENTS.TXT YET, THE INSTALLER SHOULD DO EVERYTHING !!
+
+Now i will list all the supported OSes versions that will work. Everything listed counts on all the forks too.
+
+(?) - probably will run
+(??) - probably wont
+(???) - with tweaking + changing the source code
+
+Linux:
+
+Debian
+Arch (and all non-systemd distros)
+Ubuntu
+Alpine
+Void
+Gentoo
+Slackware (?)
+
+Windows:
+
+Windows 11
+Windows 10
+Windows 8
+Windows 7 x64
+Windows 7 (??)
