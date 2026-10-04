@@ -10,3 +10,5 @@ Premade JVM optimizations + NVIDIA-threaded optimization fix flags, In-launcher 
 Supports .mrpack import + export and all modloaders and ETC. general features
 
 Currently thats it, i will do an update ~ a week, there isnt any logo yet (Coded with AI for ~3 days on the 1st release) Expect alot of bugs. Made for Linux (primarily) and Windows.
+
+!! THERE IS NO REQUIREMENTS.TXT YET, THE INSTALLER SHOULD DO EVERYTHING !!
