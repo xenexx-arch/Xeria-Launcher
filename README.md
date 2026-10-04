@@ -1,6 +1,7 @@
 Another newmade Minecraft Launcher!
 Was written fully on Python, designed to just work without any advanced/extended functions
 Features:
+Cracked and License versions available
 Auto Java selection + installation
 Premade JVM optimization + NVIDIA threaded-optimization fix flags
 In-launcher mod, modpack, resourcepack, shaderpack installer
