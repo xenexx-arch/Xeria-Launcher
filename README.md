@@ -13,7 +13,7 @@ Currently thats it, i will do an update ~ a week, there isnt any logo yet (Coded
 
 !! THERE IS NO REQUIREMENTS.TXT YET, THE INSTALLER SHOULD DO EVERYTHING !!
 
-Now i will list all the supported OSes versions that will work. Everything listed counts on all the forks too.
+Now i will list all the supported OS versions that will work. Everything listed counts on all the forks too.
 
 (?) - probably will run
 (??) - probably wont
