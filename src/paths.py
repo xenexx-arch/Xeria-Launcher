@@ -1,4 +1,4 @@
-import os, platform
+import os, platform, subprocess
 from pathlib import Path
 
 IS_WIN   = platform.system() == "Windows"
@@ -27,7 +27,4 @@ MODRINTH_API = "https://api.modrinth.com/v2"
 for d in (MC_ROOT, PROFILES_DIR, JAVA_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
-NO_WINDOW = 0
-if IS_WIN:
-    import subprocess
-    NO_WINDOW = subprocess.CREATE_NO_WINDOW
+NO_WINDOW = subprocess.CREATE_NO_WINDOW if IS_WIN else 0

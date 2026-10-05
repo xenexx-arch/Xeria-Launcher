@@ -42,14 +42,14 @@ class ChooseInstallDialog(QDialog):
         title.setStyleSheet(f"color:{theme.FG};font-size:15pt;font-weight:bold")
         v.addWidget(title)
         for label, sub, key, accent in [
+            ("Modrinth Modpack", "Search and install from catalog", "modrinth", True),
             ("Blank Profile", "Pick a Minecraft version", "blank", False),
             ("Modpacks (.xerpack, .zip, .mrpack)", "Import from a local file", "local", False),
-            ("Modrinth Modpack", "Search and install from catalog", "modrinth", True),
         ]:
             b = QPushButton(f"  {label}\n  {sub}")
             if accent:
                 b.setStyleSheet(
-                    f"QPushButton{{background:{theme.ACCENT};color:{theme.WHITE};"
+                    f"QPushButton{{background:{theme.ACCENT};color:{theme.on_accent()};"
                     f"border:none;border-radius:0;padding:14px;"
                     f"font-family:{theme.UI_FONT};font-size:11pt;text-align:left;font-weight:bold}}"
                     f"QPushButton:hover{{background:{theme.ACCENT2}}}")
@@ -78,7 +78,7 @@ class ModpackSearchDialog(QDialog):
                 border:1px solid {theme.BORDER};padding:0;border-radius:0}}
             QListWidget::item{{padding:8px}}
             QListWidget::item:hover{{background:{theme.BG3}}}
-            QListWidget::item:selected{{background:{theme.ACCENT};color:{theme.WHITE}}}
+            QListWidget::item:selected{{background:{theme.ACCENT};color:{theme.on_accent()}}}
             QPushButton{{background:{theme.BG3};color:{theme.FG};
                 border:1px solid {theme.BORDER};border-radius:0;
                 padding:8px 16px;font-family:"{theme.UI_FONT}"}}
@@ -96,7 +96,7 @@ class ModpackSearchDialog(QDialog):
         cancel = QPushButton("Cancel"); cancel.clicked.connect(self.reject)
         btns.addWidget(cancel)
         ok = QPushButton("Install")
-        ok.setStyleSheet(f"QPushButton{{background:{theme.ACCENT};color:{theme.WHITE};"
+        ok.setStyleSheet(f"QPushButton{{background:{theme.ACCENT};color:{theme.on_accent()};"
                          f"border:none;border-radius:0;padding:8px 20px;font-weight:bold}}"
                          f"QPushButton:hover{{background:{theme.ACCENT2}}}")
         ok.clicked.connect(self._choose); btns.addWidget(ok)

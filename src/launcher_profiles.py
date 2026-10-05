@@ -1,7 +1,7 @@
 import os, sys, json, zipfile, subprocess, platform, tempfile, shutil
 from pathlib import Path
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtWidgets import (
     QMessageBox, QDialog, QFileDialog, QInputDialog, QListWidgetItem,
 )
@@ -22,15 +22,20 @@ class ProfilesMixin:
     """Profile CRUD, modpack install, import/export, backup.
     All methods assume self is a MainWindow with the standard attributes."""
 
+    ROW_HEIGHT = 56
+    ROW_GAP = 6
+
     # --------------------------------------------------------------
     def load_profiles(self):
         self.plist.blockSignals(True)
         self.plist.clear()
+        self.plist.setSpacing(self.ROW_GAP)
         self._row_map = []
         self.profiles = Profile.load_all()
 
         for p in self.profiles:
             it = QListWidgetItem(f"{p.name}\n{p.version}")
+            it.setSizeHint(QSize(0, self.ROW_HEIGHT))
             loader = (p.loader or "vanilla").lower()
             cached = loader_icon_sync(loader)
             if cached is not None:
@@ -40,7 +45,6 @@ class ProfilesMixin:
 
         self.plist.blockSignals(False)
 
-        # any loader icon we don't have cached yet → fetch it now
         for p in self.profiles:
             loader = (p.loader or "vanilla").lower()
             if loader_icon_sync(loader) is None:

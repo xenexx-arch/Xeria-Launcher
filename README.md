@@ -17,9 +17,7 @@ Currently thats it, i will do an update ~ a week, there isnt any logo yet (Coded
 
 Now i will list all the supported OS versions that will work. Everything listed counts on all the forks too.
 
-(?) - probably will run
-(??) - probably wont
-(???) - with tweaking + changing the source code
+(?) - probably will run, (??) - probably wont, (???) - with tweaking and probably the source code
 
 Linux:
 
