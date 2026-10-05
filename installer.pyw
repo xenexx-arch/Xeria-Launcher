@@ -141,17 +141,13 @@ CREATE_NO_WINDOW = 0x08000000 if IS_WIN else 0
 
 
 def _detect_opengl():
-    """Return (vendor, renderer, version_str, (major, minor)) or (None,)*4
-    on failure. Creates a hidden QOpenGLWidget to obtain a real GL context."""
     try:
-        from PyQt5.QtWidgets import QApplication
         from PyQt5.QtGui import QOpenGLContext, QOffscreenSurface, QSurfaceFormat
     except Exception as e:
         return None, None, f"PyQt GL imports failed: {e}", None
 
     try:
         ctx = QOpenGLContext()
-        # Request any version; the driver will give us what it has
         fmt = QSurfaceFormat()
         fmt.setRenderableType(QSurfaceFormat.OpenGL)
         ctx.setFormat(fmt)
@@ -207,8 +203,6 @@ def _open_ms_store_home():
 
 
 def _print_linux_hint(pm):
-    """Return a short string telling the user which distro packages map to
-    the vulkan/opencl/opengl stack."""
     if pm == "apt":
         return "sudo apt install libgl1-mesa-dri mesa-vulkan-drivers mesa-opencl-icd"
     if pm == "dnf":
@@ -346,6 +340,12 @@ class InstallWorker(QThread):
 
         self.progress.emit(60)
         self._install_pip_packages()
+
+        if self._cancelled:
+            return False, "cancelled"
+
+        self.progress.emit(90)
+        self._check_gpu_stack()
 
         if self._cancelled:
             return False, "cancelled"
@@ -616,6 +616,22 @@ class InstallWorker(QThread):
         except Exception: pass
         self._L("ok", f"repository ready at {INSTALL_DIR}")
 
+        expected = [
+            INSTALL_DIR / "xeria.pyw",
+            INSTALL_DIR / "src",
+            INSTALL_DIR / "src" / "core",
+            INSTALL_DIR / "src" / "ui",
+            INSTALL_DIR / "src" / "instances",
+            INSTALL_DIR / "src" / "browse",
+            INSTALL_DIR / "src" / "integration",
+        ]
+        missing = [p for p in expected if not p.exists()]
+        if missing:
+            raise RuntimeError(
+                "repository layout unexpected — missing: "
+                + ", ".join(str(p.relative_to(INSTALL_DIR)) for p in missing))
+        self._L("ok", "layout verified (core/ui/instances/browse/integration)")
+
     def _create_venv(self, py):
         if VENV_DIR.exists():
             self._L("venv", f"already present at {VENV_DIR}")
@@ -627,6 +643,11 @@ class InstallWorker(QThread):
     def _venv_python(self):
         if IS_WIN:
             return VENV_DIR / "Scripts" / "python.exe"
+        return VENV_DIR / "bin" / "python"
+
+    def _venv_pythonw(self):
+        if IS_WIN:
+            return VENV_DIR / "Scripts" / "pythonw.exe"
         return VENV_DIR / "bin" / "python"
 
     def _install_pip_packages(self):
@@ -682,8 +703,6 @@ class InstallWorker(QThread):
             self._L("warn", f"system package install failed: {e}")
 
     def _check_gpu_stack(self):
-        """Probe OpenGL version and warn / open the Microsoft Store or
-        print the distro install command if the version is too old."""
         self._L("sys", "probing OpenGL…")
         try:
             vendor, renderer, version, parsed = _detect_opengl()
@@ -781,7 +800,7 @@ StartupWMClass=Xeria
 
     def _make_windows_shortcut(self):
         APPS_DIR.mkdir(parents=True, exist_ok=True)
-        py = self._venv_python()
+        py = self._venv_pythonw()
         target = INSTALL_DIR / APP_EXEC
         icon = self._make_icon()
         icon_line = f"$s.IconLocation = '{icon}'; " if icon else ""
@@ -948,13 +967,12 @@ class InstallerWindow(QWidget):
             self._log("ok", "============================================")
             self._log("ok", " Xeria Launcher is installed.")
             self._log("ok", "============================================")
-            if IS_LINUX or IS_MAC:
-                py = (VENV_DIR / "Scripts" / "python.exe") if IS_WIN \
-                    else (VENV_DIR / "bin" / "python")
+            if IS_WIN:
+                self._log("hint", "launch from Start Menu or Desktop shortcut")
+            else:
+                py = VENV_DIR / "bin" / "python"
                 self._log("hint", f'launch: "{py}" "{INSTALL_DIR / APP_EXEC}"')
                 self._log("hint", "or open it from your application menu")
-            elif IS_WIN:
-                self._log("hint", "launch from Start Menu or Desktop shortcut")
             self._log("info", "")
             self._log("info", "Feel free to close this window.")
             self.bar.setValue(100)

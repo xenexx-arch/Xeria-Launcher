@@ -2,7 +2,6 @@
 import os, sys, platform
 from pathlib import Path
 
-# WebEngine needs this before QApplication exists.
 from PyQt5.QtCore import QCoreApplication, Qt
 QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
 
@@ -13,15 +12,15 @@ sys.path.insert(0, str(SRC))
 from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import QApplication
 
-import theme
-from settings import Settings
+from core import theme
+from core.settings import Settings
 
 _settings = Settings()
 theme.apply(_settings.get("theme", "dark"))
 theme.apply_accent(_settings.get("accent", "Blue"))
 
-from launcher import MainWindow
-from worker import _leaked_threads
+from ui.launcher import MainWindow
+from core.worker import _leaked_threads
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
