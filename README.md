@@ -8,10 +8,10 @@ Why exactly Xeria Launcher?
 - can easily import and export modpacks
 - many supported OSes
 
-Feel free to try it out
-list of every OS supported:
-(?) - will launch (probably), (??) - low chances, (???) - tweaking required
+what are you waiting for? feel free to .
 
+
+list of every OS supported:
 Linux:                                           Windows:
 Debian                                           Windows 11
 Arch                                             Windows 10
@@ -23,3 +23,5 @@ Slackware (?)
 
 Mac:
 None yet!
+
+(?) - will launch (probably), (??) - low chances, (???) - tweaking required
