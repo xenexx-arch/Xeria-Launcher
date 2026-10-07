@@ -1,4 +1,4 @@
-Another newbie Minecraft Launcher!
+Another newmade Minecraft Launcher!
 Was written fully on Python, designed to just work without any advanced/extended interface and functions.
 
 Why exactly Xeria Launcher?
