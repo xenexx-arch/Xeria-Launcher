@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import ssl
+import json
 import shutil
 import zipfile
 import subprocess
@@ -87,37 +88,42 @@ PIP_REQUIREMENTS = [
     "truststore",
 ]
 
+PIP_REQUIREMENTS_LINUX = [
+    "requests",
+    "Pillow",
+    "truststore",
+]
+
 LINUX_SYS_PACKAGES = {
-    "apt": ["python3-pyqt5.qtwebengine", "python3-pyqt5.qtsvg",
-            "python3-pyqt5.qtwayland", "libgl1-mesa-dri",
-            "mesa-vulkan-drivers", "mesa-opencl-icd",
+    "apt": ["python3", "python3-venv", "python3-pip",
+            "python3-pyqt5", "python3-pyqt5.qtwebengine",
+            "python3-pyqt5.qtsvg", "python3-pyqt5.qtwayland",
+            "python3-opengl",
+            "libgl1-mesa-dri", "mesa-vulkan-drivers", "mesa-opencl-icd",
             "libglx-mesa0", "libopencl1"],
-    "dnf": ["python3-qt5-webengine", "python3-qt5-svg", "qt5-qtwayland",
+    "dnf": ["python3", "python3-pip", "python3-qt5",
+            "python3-qt5-webengine", "python3-qt5-svg", "qt5-qtwayland",
+            "python3-pyopengl",
             "mesa-dri-drivers", "mesa-vulkan-drivers",
             "mesa-libOpenCL", "ocl-icd"],
-    "pacman": ["python-pyqt5-webengine", "python-pyqt5-svg",
-               "qt5-wayland", "mesa", "vulkan-icd-loader",
-               "ocl-icd"],
-    "zypper": ["python3-qt5-webengine", "libqt5-qtsvg",
-               "libqt5-qtwayland", "Mesa", "Mesa-libGL1",
+    "pacman": ["python", "python-pip",
+               "python-pyqt5", "python-pyqt5-webengine", "python-pyqt5-svg",
+               "qt5-wayland", "python-opengl",
+               "mesa", "vulkan-icd-loader", "ocl-icd"],
+    "zypper": ["python3", "python3-pip", "python3-qt5",
+               "python3-qt5-webengine", "libqt5-qtsvg",
+               "libqt5-qtwayland", "python3-opengl",
+               "Mesa", "Mesa-libGL1",
                "libvulkan1", "libOpenCL1", "ocl-icd"],
-    "apk": ["py3-pyqt5-webengine", "py3-pyqt5-svg", "qt5-qtwayland",
+    "apk": ["python3", "py3-pip", "py3-pyqt5",
+            "py3-pyqt5-webengine", "py3-pyqt5-svg", "qt5-qtwayland",
+            "py3-opengl",
             "mesa-dri-gallium", "vulkan-loader", "opencl-icd-loader"],
 }
 
 MIN_PYTHON = (3, 9)
-RECOMMENDED_PYTHON = (3, 12)
 
-PYTHON_DOWNLOAD_URLS = {
-    "Windows": {
-        "3.12": "https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe",
-        "3.13": "https://www.python.org/ftp/python/3.13.0/python-3.13.0-amd64.exe",
-    },
-    "Darwin": {
-        "3.12": "https://www.python.org/ftp/python/3.12.7/python-3.12.7-macos11.pkg",
-        "3.13": "https://www.python.org/ftp/python/3.13.0/python-3.13.0-macos11.pkg",
-    },
-}
+PYTHON_RELEASES_JSON = "https://www.python.org/api/v2/downloads/release/?is_published=true&pre_release=false"
 
 MIN_GL = (3, 3)
 
@@ -216,6 +222,62 @@ def _print_linux_hint(pm):
     return "install your distro's mesa/vulkan/opencl packages"
 
 
+def _force_rmtree(path):
+    path = Path(path)
+    if not path.exists():
+        return
+    try:
+        shutil.rmtree(path)
+        return
+    except Exception:
+        pass
+    for root, dirs, files in os.walk(path, topdown=False):
+        for name in files:
+            try:
+                os.chmod(os.path.join(root, name), 0o777)
+            except Exception:
+                pass
+            try:
+                os.unlink(os.path.join(root, name))
+            except Exception:
+                pass
+        for name in dirs:
+            try:
+                os.rmdir(os.path.join(root, name))
+            except Exception:
+                pass
+    try:
+        os.rmdir(path)
+    except Exception:
+        pass
+    if path.exists():
+        raise RuntimeError(
+            f"could not fully remove {path} — close any editors/terminals "
+            f"sitting inside it and retry")
+
+
+def _ensure_openssl_dlls(app_dir):
+    if not IS_WIN:
+        return
+    try:
+        import PyQt5
+        qt_bin = Path(PyQt5.__file__).parent / "Qt5" / "bin"
+    except Exception:
+        return
+    if not qt_bin.exists():
+        return
+    for dll in ("libssl-1_1-x64.dll", "libcrypto-1_1-x64.dll",
+                "libssl-1_1.dll", "libcrypto-1_1.dll"):
+        src = qt_bin / dll
+        if src.exists():
+            dst = Path(app_dir) / dll
+            if not dst.exists() or dst.stat().st_size != src.stat().st_size:
+                try:
+                    shutil.copy2(src, dst)
+                except Exception:
+                    pass
+
+
 class PasswordDialog(QDialog):
     def __init__(self, parent=None, prompt="Administrator password required."):
         super().__init__(parent)
@@ -276,6 +338,7 @@ class InstallWorker(QThread):
         self._log = log_fn
         self._cancelled = False
         self._password = None
+        self._sudo_skipped = False
 
     def _L(self, tag, msg):
         self._log(tag, msg)
@@ -283,6 +346,9 @@ class InstallWorker(QThread):
 
     def cancel(self):
         self._cancelled = True
+
+    def skip_sudo(self):
+        self._sudo_skipped = True
 
     def supply_password(self, password):
         self._password = password
@@ -310,10 +376,12 @@ class InstallWorker(QThread):
         self.progress.emit(5)
         py = self._find_python()
         if py is None:
-            self._L("py", f"no Python >= {MIN_PYTHON[0]}.{MIN_PYTHON[1]} found")
-            py = self._prompt_install_python()
+            self._L("py", f"no usable Python >= {MIN_PYTHON[0]}.{MIN_PYTHON[1]} found")
+            py = self._install_new_python()
             if py is None:
                 return False, "Python still not available"
+        else:
+            self._L("ok", f"using existing interpreter {py}")
 
         if self._cancelled:
             return False, "cancelled"
@@ -343,6 +411,9 @@ class InstallWorker(QThread):
 
         if self._cancelled:
             return False, "cancelled"
+
+        if IS_WIN:
+            self._fix_windows_tls()
 
         self.progress.emit(90)
         self._check_gpu_stack()
@@ -377,7 +448,7 @@ class InstallWorker(QThread):
             return True
         self.request_password.emit(
             "Administrator privileges are needed to install system packages.\n"
-            "Enter your password to continue:")
+            "Enter your password to continue (or Cancel to skip):")
         return False
 
     def _run(self, cmd, cwd=None, check=True, use_sudo=False):
@@ -385,13 +456,14 @@ class InstallWorker(QThread):
         if use_sudo and self._needs_sudo():
             if self._password is None:
                 self._ensure_password()
-                for _ in range(600):
-                    if self._password is not None or self._cancelled:
+                for _ in range(3000):
+                    if (self._password is not None or self._cancelled
+                            or self._sudo_skipped):
                         break
                     QThread.msleep(100)
                 if self._cancelled:
                     raise RuntimeError("cancelled")
-                if self._password is None:
+                if self._sudo_skipped or self._password is None:
                     raise RuntimeError("no password supplied")
             full = ["sudo", "-S", "-p", ""] + [str(c) for c in cmd]
             proc = subprocess.Popen(
@@ -414,14 +486,17 @@ class InstallWorker(QThread):
                               check=check,
                               creationflags=CREATE_NO_WINDOW).returncode
 
-    def _download(self, url, dest):
-        self._L("net", f"GET {url}  (ssl: {_SSL_MODE})")
+    def _http_get(self, url, timeout=30):
         req = urllib.request.Request(
             url, headers={"User-Agent": "Xeria Launcher/1.0"})
         if _SSL_CONTEXT is not None:
-            r = urllib.request.urlopen(req, context=_SSL_CONTEXT, timeout=120)
-        else:
-            r = urllib.request.urlopen(req, timeout=120)
+            return urllib.request.urlopen(req, context=_SSL_CONTEXT,
+                                          timeout=timeout)
+        return urllib.request.urlopen(req, timeout=timeout)
+
+    def _download(self, url, dest):
+        self._L("net", f"GET {url}  (ssl: {_SSL_MODE})")
+        r = self._http_get(url, timeout=120)
         with r:
             total = int(r.headers.get("Content-Length", 0))
             got = 0
@@ -441,20 +516,39 @@ class InstallWorker(QThread):
         try:
             out = subprocess.run(
                 [exe, "-c",
-                 "import sys;print('%d.%d' % sys.version_info[:2])"],
+                 "import sys;print('%d.%d' % sys.version_info[:2]);"
+                 "print(sys.executable)"],
                 capture_output=True, text=True, timeout=10,
                 creationflags=CREATE_NO_WINDOW)
             if out.returncode != 0:
                 return None
-            return tuple(int(x) for x in out.stdout.strip().split("."))
+            lines = out.stdout.strip().splitlines()
+            if len(lines) < 2:
+                return None
+            ver_line = lines[0].strip()
+            exe_line = lines[1].strip()
+            if not exe_line or not os.path.isfile(exe_line):
+                return None
+            return tuple(int(x) for x in ver_line.split("."))
         except Exception:
             return None
+
+    def _can_make_venv(self, exe):
+        try:
+            out = subprocess.run(
+                [exe, "-c", "import venv,ensurepip;print('ok')"],
+                capture_output=True, text=True, timeout=15,
+                creationflags=CREATE_NO_WINDOW)
+            return out.returncode == 0 and "ok" in out.stdout
+        except Exception:
+            return False
 
     def _find_python(self):
         seen = set()
         candidates = []
-        for name in ("python3.13", "python3.12", "python3.11", "python3.10",
-                     "python3.9", "python3", "python"):
+        for name in ("python3.15", "python3.14", "python3.13", "python3.12",
+                     "python3.11", "python3.10", "python3.9",
+                     "python3", "python"):
             p = self._which(name)
             if p and p not in seen:
                 seen.add(p)
@@ -462,11 +556,18 @@ class InstallWorker(QThread):
 
         best, best_ver = None, None
         for c in candidates:
+            if IS_WIN and "WindowsApps" in c.replace("/", "\\"):
+                self._L("py", f"{c} -> Microsoft Store stub, skipping")
+                continue
             v = self._python_version_of(c)
             if not v:
+                self._L("py", f"{c} -> unusable, skipping")
                 continue
             if v < MIN_PYTHON:
                 self._L("py", f"{c} -> {v[0]}.{v[1]} (too old)")
+                continue
+            if not self._can_make_venv(c):
+                self._L("py", f"{c} -> no venv/ensurepip, skipping")
                 continue
             self._L("py", f"{c} -> {v[0]}.{v[1]}")
             if best_ver is None or v > best_ver:
@@ -477,15 +578,54 @@ class InstallWorker(QThread):
         self._L("ok", f"selected {best} ({best_ver[0]}.{best_ver[1]})")
         return best
 
-    def _prompt_install_python(self):
-        system = platform.system()
-        if system == "Linux":
+    def _fetch_latest_stable_python(self):
+        self._L("net", "querying python.org for latest stable release")
+        try:
+            r = self._http_get(PYTHON_RELEASES_JSON, timeout=20)
+            data = r.read()
+        except Exception as e:
+            self._L("warn", f"python.org API failed: {e}")
+            return None
+
+        try:
+            releases = json.loads(data.decode("utf-8"))
+        except Exception as e:
+            self._L("warn", f"python.org API parse failed: {e}")
+            return None
+
+        best_key = None
+        for rel in releases:
+            name = rel.get("name") or ""
+            m = re.match(r"Python (\d+)\.(\d+)\.(\d+)$", name)
+            if not m:
+                continue
+            key = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            if best_key is None or key > best_key:
+                best_key = key
+
+        if best_key is None:
+            self._L("warn", "no stable 3.x release found in API response")
+            return None
+
+        self._L("ok",
+                f"latest stable: Python {best_key[0]}.{best_key[1]}.{best_key[2]}")
+        return best_key
+
+    def _python_installer_url(self, ver):
+        v = f"{ver[0]}.{ver[1]}.{ver[2]}"
+        if IS_WIN:
+            return f"https://www.python.org/ftp/python/{v}/python-{v}-amd64.exe"
+        if IS_MAC:
+            return f"https://www.python.org/ftp/python/{v}/python-{v}-macos11.pkg"
+        return None
+
+    def _install_new_python(self):
+        self._L("py", "no usable local Python found — installing new one")
+        if IS_LINUX:
             return self._install_python_linux()
-        if system == "Windows":
-            return self._install_python_windows()
-        if system == "Darwin":
-            return self._install_python_mac()
-        self._L("err", f"no auto-install path for {system}")
+        if IS_WIN or IS_MAC:
+            return self._install_python_desktop()
+        self._L("err", f"no auto-install path for {platform.system()}")
         return None
 
     def _install_python_linux(self):
@@ -519,70 +659,87 @@ class InstallWorker(QThread):
                           use_sudo=True)
             elif pm == "apk":
                 self._run(["apk", "add"] + pkgs, use_sudo=True)
-            self._L("ok", "python installed")
+            self._L("ok", "python installed via package manager")
         except subprocess.CalledProcessError as e:
             self._L("err", f"python install failed: {e}")
             return None
+        except RuntimeError as e:
+            self._L("err", f"python install aborted: {e}")
+            return None
         return self._find_python()
 
-    def _install_python_windows(self):
-        url = PYTHON_DOWNLOAD_URLS["Windows"].get("3.12")
+    def _install_python_desktop(self):
+        ver = self._fetch_latest_stable_python()
+        if ver is None:
+            self._L("err", "could not determine latest Python version")
+            return None
+        url = self._python_installer_url(ver)
         if not url:
+            self._L("err", f"no installer URL for {platform.system()}")
             return None
-        tmp = Path(os.getenv("TEMP", ".")) / "python-installer.exe"
-        self._download(url, tmp)
-        try:
-            subprocess.run([str(tmp), "/quiet",
-                            "InstallAllUsers=0",
-                            "PrependPath=1",
-                            "Include_test=0",
-                            "Include_launcher=1"],
-                           check=True, creationflags=CREATE_NO_WINDOW)
-        except subprocess.CalledProcessError as e:
-            self._L("err", f"python installer failed: {e}")
+
+        self._L("py", f"downloading Python {ver[0]}.{ver[1]}.{ver[2]}")
+
+        if IS_WIN:
+            tmp = Path(os.getenv("TEMP", ".")) / "python-installer.exe"
+            self._download(url, tmp)
+            try:
+                subprocess.run([str(tmp), "/quiet",
+                                "InstallAllUsers=0",
+                                "PrependPath=1",
+                                "Include_test=0",
+                                "Include_launcher=1"],
+                               check=True, creationflags=CREATE_NO_WINDOW)
+            except subprocess.CalledProcessError as e:
+                self._L("err", f"python installer failed: {e}")
+                return None
+            finally:
+                try: tmp.unlink()
+                except Exception: pass
+            tag = f"Python{ver[0]}{ver[1]}"
+            candidates = [
+                HOME / "AppData" / "Local" / "Programs" / "Python"
+                / tag / "python.exe",
+                Path(os.getenv("LOCALAPPDATA", "")) / "Programs" / "Python"
+                / tag / "python.exe",
+                Path(f"C:\\{tag}\\python.exe"),
+            ]
+            for c in candidates:
+                if c.exists():
+                    self._L("ok", f"python installed at {c}")
+                    return str(c)
+            py = self._which("python")
+            if py and "WindowsApps" not in py.replace("/", "\\"):
+                return py
+            self._L("err", "python installed but not on PATH, restart shell")
             return None
-        finally:
-            try: tmp.unlink()
-            except Exception: pass
-        candidates = [
-            HOME / "AppData" / "Local" / "Programs" / "Python"
-            / "Python312" / "python.exe",
-            Path(os.getenv("LOCALAPPDATA", "")) / "Programs" / "Python"
-            / "Python312" / "python.exe",
-            Path(r"C:\Python312\python.exe"),
-        ]
-        for c in candidates:
-            if c.exists():
-                self._L("ok", f"python installed at {c}")
-                return str(c)
-        py = self._which("python")
-        if py:
-            return py
-        self._L("err", "python installed but not on PATH, restart shell")
+
+        if IS_MAC:
+            tmp = Path("/tmp") / "python-installer.pkg"
+            self._download(url, tmp)
+            try:
+                self._run(["installer", "-pkg", str(tmp), "-target", "/"],
+                          use_sudo=True)
+            except subprocess.CalledProcessError as e:
+                self._L("err", f"pkg install failed: {e}")
+                return None
+            except RuntimeError as e:
+                self._L("err", f"pkg install aborted: {e}")
+                return None
+            finally:
+                try: tmp.unlink()
+                except Exception: pass
+            return self._find_python()
+
         return None
-
-    def _install_python_mac(self):
-        url = PYTHON_DOWNLOAD_URLS["Darwin"].get("3.12")
-        if not url:
-            return None
-        tmp = Path("/tmp") / "python-installer.pkg"
-        self._download(url, tmp)
-        try:
-            self._run(["installer", "-pkg", str(tmp), "-target", "/"],
-                      use_sudo=True)
-        except subprocess.CalledProcessError as e:
-            self._L("err", f"pkg install failed: {e}")
-            return None
-        finally:
-            try: tmp.unlink()
-            except Exception: pass
-        return self._find_python()
 
     def _download_repo(self):
         INSTALL_DIR.parent.mkdir(parents=True, exist_ok=True)
+
         if INSTALL_DIR.exists():
-            self._L("fs", f"removing {INSTALL_DIR}")
-            shutil.rmtree(INSTALL_DIR, ignore_errors=True)
+            self._L("fs", f"removing old install dir {INSTALL_DIR}")
+            _force_rmtree(INSTALL_DIR)
+            self._L("ok", "old install dir removed")
 
         tmp_zip = INSTALL_DIR.parent / "xeria-main.zip"
         last_err = None
@@ -600,7 +757,7 @@ class InstallWorker(QThread):
         self._L("fs", f"extracting {tmp_zip}")
         extract_root = INSTALL_DIR.parent / "_xeria_extract"
         if extract_root.exists():
-            shutil.rmtree(extract_root, ignore_errors=True)
+            _force_rmtree(extract_root)
         with zipfile.ZipFile(tmp_zip) as z:
             z.extractall(extract_root)
         try: tmp_zip.unlink()
@@ -634,10 +791,20 @@ class InstallWorker(QThread):
 
     def _create_venv(self, py):
         if VENV_DIR.exists():
-            self._L("venv", f"already present at {VENV_DIR}")
-            return
-        self._L("venv", f"creating at {VENV_DIR}")
-        venv.create(str(VENV_DIR), with_pip=True, clear=False)
+            self._L("venv", f"removing old venv at {VENV_DIR}")
+            _force_rmtree(VENV_DIR)
+            self._L("ok", "old venv removed")
+
+        self._L("venv", f"creating new venv at {VENV_DIR}")
+        kwargs = dict(with_pip=True, clear=False)
+        if IS_LINUX:
+            kwargs["system_site_packages"] = True
+            self._L("venv", "linux: system_site_packages=True "
+                            "(uses distro PyQt5 with working OpenSSL)")
+        try:
+            venv.create(str(VENV_DIR), **kwargs)
+        except Exception as e:
+            raise RuntimeError(f"venv.create failed: {e}")
         self._L("ok", "virtualenv created")
 
     def _venv_python(self):
@@ -660,15 +827,55 @@ class InstallWorker(QThread):
                        "pip", "setuptools", "wheel"])
         except subprocess.CalledProcessError as e:
             self._L("warn", f"pip bootstrap failed: {e}")
-        for i, pkg in enumerate(PIP_REQUIREMENTS, 1):
+
+        pkgs = PIP_REQUIREMENTS_LINUX if IS_LINUX else PIP_REQUIREMENTS
+        if IS_LINUX:
+            self._L("pip", "linux: skipping PyQt5/PyQtWebEngine/PyOpenGL "
+                           "(using system packages)")
+        for i, pkg in enumerate(pkgs, 1):
             self._L("pip", f"install {pkg}")
             try:
                 self._run([py, "-m", "pip", "install", "--upgrade", pkg])
                 self._L("ok", f"{pkg} installed")
             except subprocess.CalledProcessError as e:
                 self._L("warn", f"pip install failed for {pkg}: {e}")
-            self.progress.emit(60 + i * 30 // len(PIP_REQUIREMENTS))
+            self.progress.emit(60 + i * 30 // len(pkgs))
         self._L("ok", "python dependencies installed")
+
+    def _missing_packages(self, pm, pkgs):
+        try:
+            if pm == "pacman":
+                out = subprocess.run(["pacman", "-Qq"] + pkgs,
+                                     capture_output=True, text=True,
+                                     timeout=10,
+                                     creationflags=CREATE_NO_WINDOW)
+                installed = set(out.stdout.split())
+                return [p for p in pkgs if p not in installed]
+            if pm == "apt":
+                out = subprocess.run(["dpkg", "-s"] + pkgs,
+                                     capture_output=True, text=True,
+                                     timeout=10,
+                                     creationflags=CREATE_NO_WINDOW)
+                installed = set()
+                for line in out.stdout.splitlines():
+                    if line.startswith("Package:"):
+                        installed.add(line.split(":", 1)[1].strip())
+                return [p for p in pkgs if p not in installed]
+            if pm == "dnf":
+                out = subprocess.run(["rpm", "-q"] + pkgs,
+                                     capture_output=True, text=True,
+                                     timeout=10,
+                                     creationflags=CREATE_NO_WINDOW)
+                installed = set()
+                for line in out.stdout.splitlines():
+                    if "is not installed" in line:
+                        continue
+                    if ".x86_64" in line or ".noarch" in line:
+                        installed.add(line.split("-")[0])
+                return [p for p in pkgs if p not in installed]
+        except Exception:
+            pass
+        return pkgs
 
     def _install_system_packages(self):
         if not IS_LINUX:
@@ -684,23 +891,101 @@ class InstallWorker(QThread):
         pkgs = LINUX_SYS_PACKAGES.get(pm, [])
         if not pkgs:
             return
+
+        missing = self._missing_packages(pm, pkgs)
+        if not missing:
+            self._L("ok", "all system packages already installed")
+            return
+        self._L("sys", f"missing system packages: {', '.join(missing)}")
+
         try:
             if pm == "apt":
                 self._run(["apt-get", "update"], check=False, use_sudo=True)
-                self._run(["apt-get", "install", "-y"] + pkgs, use_sudo=True)
+                self._run(["apt-get", "install", "-y"] + missing,
+                          use_sudo=True)
             elif pm == "dnf":
-                self._run(["dnf", "install", "-y"] + pkgs, use_sudo=True)
+                self._run(["dnf", "install", "-y"] + missing, use_sudo=True)
             elif pm == "pacman":
-                self._run(["pacman", "-S", "--needed", "--noconfirm"] + pkgs,
+                self._run(["pacman", "-S", "--needed", "--noconfirm"] + missing,
                           use_sudo=True)
             elif pm == "zypper":
-                self._run(["zypper", "--non-interactive", "install"] + pkgs,
+                self._run(["zypper", "--non-interactive", "install"] + missing,
                           use_sudo=True)
             elif pm == "apk":
-                self._run(["apk", "add"] + pkgs, use_sudo=True)
+                self._run(["apk", "add"] + missing, use_sudo=True)
             self._L("ok", "system packages installed")
+        except RuntimeError as e:
+            msg = str(e).lower()
+            if "no password" in msg:
+                self._L("warn",
+                        "system package install skipped (no sudo password)")
+                self._L("hint",
+                        "install manually if QtWebEngine fails: "
+                        + _print_linux_hint(pm))
+                self._password = None
+                self._sudo_skipped = False
+                return
+            if "cancelled" in msg:
+                raise
+            self._L("warn", f"system package install failed: {e}")
         except subprocess.CalledProcessError as e:
             self._L("warn", f"system package install failed: {e}")
+
+    def _fix_windows_tls(self):
+        if not IS_WIN:
+            return
+        self._L("win", "checking OpenSSL availability for Qt")
+        try:
+            import PyQt5
+            qt_bin = Path(PyQt5.__file__).parent / "Qt5" / "bin"
+        except Exception as e:
+            self._L("warn", f"could not locate PyQt5: {e}")
+            return
+
+        if not qt_bin.exists():
+            self._L("warn", f"Qt5 bin not found at {qt_bin}")
+            return
+
+        copied = []
+        for dll in ("libssl-1_1-x64.dll", "libcrypto-1_1-x64.dll",
+                    "libssl-1_1.dll", "libcrypto-1_1.dll"):
+            src = qt_bin / dll
+            if src.exists():
+                copied.append(dll)
+
+        if copied:
+            self._L("ok",
+                    f"Qt ships OpenSSL DLLs: {', '.join(copied)}")
+            self._L("win",
+                    "PyQt5-Qt5 wheel includes OpenSSL 1.1 — TLS should work")
+        else:
+            self._L("warn",
+                    "Qt5 bin does not contain libssl/libcrypto — TLS may fail")
+            self._L("hint",
+                    "PyQt5 ships its own OpenSSL inside the wheel; if TLS "
+                    "still fails, ensure no conflicting libssl-3.dll is in "
+                    "C:\\Windows\\System32")
+
+        try:
+            probe = subprocess.run(
+                [self._venv_python(), "-c",
+                 "from PyQt5.QtNetwork import QSslSocket;"
+                 "print('ssl_ok' if QSslSocket.supportsSsl() else 'ssl_fail')"],
+                capture_output=True, text=True, timeout=15,
+                creationflags=CREATE_NO_WINDOW)
+            out = (probe.stdout or "").strip()
+            if "ssl_ok" in out:
+                self._L("ok", "QSslSocket.supportsSsl() = True")
+            elif "ssl_fail" in out:
+                self._L("warn", "QSslSocket.supportsSsl() = False")
+                self._L("hint",
+                        "TLS will not work — Modrinth search will fail. "
+                        "Qt needs libssl-1_1-x64.dll and libcrypto-1_1-x64.dll "
+                        "next to the python executable.")
+            else:
+                self._L("warn", f"ssl probe returned: {out or '(empty)'}")
+        except Exception as e:
+            self._L("warn", f"ssl probe failed: {e}")
 
     def _check_gpu_stack(self):
         self._L("sys", "probing OpenGL…")
@@ -762,6 +1047,9 @@ class InstallWorker(QThread):
     def _make_linux_desktop(self):
         APPS_DIR.mkdir(parents=True, exist_ok=True)
         desktop_path = APPS_DIR / "xeria-launcher.desktop"
+        if desktop_path.exists():
+            try: desktop_path.unlink()
+            except Exception: pass
         icon = self._make_icon()
         icon_line = f"Icon={icon}" if icon else "Icon=applications-games"
         py = self._venv_python()
@@ -785,6 +1073,9 @@ StartupWMClass=Xeria
         if DESKTOP_DIR.exists() and DESKTOP_DIR != APPS_DIR:
             try:
                 desk_copy = DESKTOP_DIR / "xeria-launcher.desktop"
+                if desk_copy.exists():
+                    try: desk_copy.unlink()
+                    except Exception: pass
                 desk_copy.write_text(content)
                 desk_copy.chmod(0o755)
                 if self._which("gio"):
@@ -806,6 +1097,9 @@ StartupWMClass=Xeria
         icon_line = f"$s.IconLocation = '{icon}'; " if icon else ""
 
         def _ps(link_path):
+            if link_path.exists():
+                try: link_path.unlink()
+                except Exception: pass
             ps = (
                 "$ws = New-Object -ComObject WScript.Shell; "
                 f"$s = $ws.CreateShortcut('{link_path}'); "
@@ -921,7 +1215,7 @@ class InstallerWindow(QWidget):
                 "ok": GREEN, "warn": YELLOW, "err": RED,
                 "net": CYAN, "pip": CYAN, "py": CYAN, "sys": GRAY,
                 "fs": GRAY, "venv": CYAN, "run": GRAY, "info": FG,
-                "hint": CYAN,
+                "hint": CYAN, "win": CYAN,
             }.get(tag, FG)
             safe = (str(msg).replace("&", "&amp;")
                            .replace("<", "&lt;")
@@ -956,7 +1250,7 @@ class InstallerWindow(QWidget):
     def _on_password_request(self, prompt):
         pwd = self._ask_password(prompt)
         if pwd is None:
-            self._worker.cancel()
+            self._worker.skip_sudo()
         else:
             self._worker.supply_password(pwd)
 
@@ -1010,6 +1304,10 @@ def main():
     ic = QIcon.fromTheme("applications-games")
     if not ic.isNull():
         app.setWindowIcon(ic)
+
+    if IS_WIN:
+        _ensure_openssl_dlls(Path(sys.executable).parent)
+
     w = InstallerWindow()
     w.show()
     sys.exit(app.exec_())
