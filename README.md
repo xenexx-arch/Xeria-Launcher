@@ -1,3 +1,5 @@
+<
+
 Another newbie Minecraft Launcher!
 Was written fully on Python, designed to just work without any advanced/extended interface or functions.
 
