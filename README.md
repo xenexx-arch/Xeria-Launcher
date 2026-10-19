@@ -1,4 +1,4 @@
-<img src="/src/icons/xeria.jpg" width="430" height="417">
+<img src="/src/icons/xeria.jpg" width="100" height="100">
 
 Another newbie Minecraft Launcher!
 Was written fully on Python, designed to just work without any advanced/extended interface or functions.
