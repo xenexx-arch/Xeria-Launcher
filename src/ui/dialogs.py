@@ -1,5 +1,5 @@
-from PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
+from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QPushButton, QComboBox,
     QCheckBox, QGridLayout, QTabWidget, QPlainTextEdit,
@@ -20,7 +20,7 @@ def fade_in(dialog, duration=120):
     dialog.setWindowOpacity(0.0)
     a = QPropertyAnimation(dialog, b"windowOpacity", dialog)
     a.setDuration(duration); a.setStartValue(0.0); a.setEndValue(1.0)
-    a.setEasingCurve(QEasingCurve.OutCubic)
+    a.setEasingCurve(QEasingCurve.Type.OutCubic)
     a.start()
     dialog._fade_anim = a
 
@@ -37,21 +37,26 @@ class ChooseInstallDialog(QDialog):
                 border:1px solid {theme.BORDER};border-radius:0;
                 padding:14px;font-family:"{theme.UI_FONT}";font-size:11pt;text-align:left}}
             QPushButton:hover{{background:{theme.BORDER}}}""")
-        v = QVBoxLayout(self); v.setContentsMargins(20, 20, 20, 20); v.setSpacing(10)
+        v = QVBoxLayout(self); v.setContentsMargins(20, 20, 20, 20)
+        v.setSpacing(10)
         title = QLabel("Add New")
         title.setStyleSheet(f"color:{theme.FG};font-size:15pt;font-weight:bold")
         v.addWidget(title)
         for label, sub, key, accent in [
-            ("Modrinth Modpack", "Search and install from catalog", "modrinth", True),
+            ("Modrinth Modpack", "Search and install from catalog",
+             "modrinth", True),
             ("Blank Profile", "Pick a Minecraft version", "blank", False),
-            ("Modpacks (.xerpack, .zip, .mrpack)", "Import from a local file", "local", False),
+            ("Modpacks (.xerpack, .zip, .mrpack)",
+             "Import from a local file", "local", False),
         ]:
             b = QPushButton(f"  {label}\n  {sub}")
             if accent:
                 b.setStyleSheet(
-                    f"QPushButton{{background:{theme.ACCENT};color:{theme.on_accent()};"
+                    f"QPushButton{{background:{theme.ACCENT};"
+                    f"color:{theme.on_accent()};"
                     f"border:none;border-radius:0;padding:14px;"
-                    f"font-family:{theme.UI_FONT};font-size:11pt;text-align:left;font-weight:bold}}"
+                    f"font-family:{theme.UI_FONT};font-size:11pt;"
+                    f"text-align:left;font-weight:bold}}"
                     f"QPushButton:hover{{background:{theme.ACCENT2}}}")
             b.clicked.connect(lambda _, k=key: self._pick(k))
             v.addWidget(b)
@@ -83,28 +88,33 @@ class ModpackSearchDialog(QDialog):
                 border:1px solid {theme.BORDER};border-radius:0;
                 padding:8px 16px;font-family:"{theme.UI_FONT}"}}
             QPushButton:hover{{background:{theme.BORDER}}}""")
-        v = QVBoxLayout(self); v.setContentsMargins(14, 14, 14, 14); v.setSpacing(8)
+        v = QVBoxLayout(self); v.setContentsMargins(14, 14, 14, 14)
+        v.setSpacing(8)
         head = QLabel("Search Modrinth modpacks")
         head.setStyleSheet(f"color:{theme.FG};font-size:13pt;font-weight:bold")
         v.addWidget(head)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Type to search modpacks…")
+        self.search.setPlaceholderText("Type to search modpacks")
         v.addWidget(self.search)
-        self.list = QListWidget(); self.list.itemDoubleClicked.connect(lambda _: self._choose())
+        self.list = QListWidget()
+        self.list.itemDoubleClicked.connect(lambda _: self._choose())
         v.addWidget(self.list, 1)
         btns = QHBoxLayout(); btns.addStretch()
         cancel = QPushButton("Cancel"); cancel.clicked.connect(self.reject)
         btns.addWidget(cancel)
         ok = QPushButton("Install")
-        ok.setStyleSheet(f"QPushButton{{background:{theme.ACCENT};color:{theme.on_accent()};"
-                         f"border:none;border-radius:0;padding:8px 20px;font-weight:bold}}"
+        ok.setStyleSheet(f"QPushButton{{background:{theme.ACCENT};"
+                         f"color:{theme.on_accent()};"
+                         f"border:none;border-radius:0;padding:8px 20px;"
+                         f"font-weight:bold}}"
                          f"QPushButton:hover{{background:{theme.ACCENT2}}}")
         ok.clicked.connect(self._choose); btns.addWidget(ok)
         v.addLayout(btns)
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True); self._debounce.setInterval(800)
         self._debounce.timeout.connect(self._do_search)
-        self.search.textChanged.connect(lambda _: (self._debounce.stop(), self._debounce.start()))
+        self.search.textChanged.connect(
+            lambda _: (self._debounce.stop(), self._debounce.start()))
         self.search.returnPressed.connect(self._do_search)
         QTimer.singleShot(200, self._do_search)
         fade_in(self)
@@ -113,10 +123,12 @@ class ModpackSearchDialog(QDialog):
         from integration import modrinth
         q = self.search.text().strip() or "fabulously optimized"
         self._req_id += 1; rid = self._req_id
-        self.list.clear(); self.list.addItem("  Searching…")
-        w = Worker(lambda log, progress, progress_end: modrinth.search_modpacks(q))
-        w.done.connect(lambda r, r_=rid: self._apply(r, r_), Qt.QueuedConnection)
-        w.log.connect(self.log_fn, Qt.QueuedConnection)
+        self.list.clear(); self.list.addItem("  Searching")
+        w = Worker(
+            lambda log, progress, progress_end: modrinth.search_modpacks(q))
+        w.done.connect(lambda r, r_=rid: self._apply(r, r_),
+                       Qt.ConnectionType.QueuedConnection)
+        w.log.connect(self.log_fn, Qt.ConnectionType.QueuedConnection)
         self._w = w; w.start()
 
     def _apply(self, hits, rid):
@@ -140,7 +152,8 @@ class ProfileDialog(QDialog):
         self.settings = settings
         self.profile = profile
         self.is_new = profile is None
-        self.setWindowTitle("New Instance" if self.is_new else f"Edit — {profile.name}")
+        self.setWindowTitle(
+            "New Instance" if self.is_new else f"Edit — {profile.name}")
         self.resize(640, 600)
         self.setMinimumSize(520, 460)
         self.setStyleSheet(
@@ -151,7 +164,8 @@ class ProfileDialog(QDialog):
             f"QCheckBox{{background:{theme.BG};color:{theme.FG};"
             f"font-family:\"{theme.UI_FONT}\";font-size:10pt}}"
         )
-        v = QVBoxLayout(self); v.setContentsMargins(16, 16, 16, 16); v.setSpacing(10)
+        v = QVBoxLayout(self); v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(10)
         self.tabs = QTabWidget(self); v.addWidget(self.tabs, 1)
 
         t1 = QWidget(); g1 = QGridLayout(t1)
@@ -162,7 +176,8 @@ class ProfileDialog(QDialog):
         g1.addWidget(QLabel("Version"), 1, 0)
         self.ver = QComboBox()
         ids = [x["id"] for x in releases]; self.ver.addItems(ids)
-        if profile and profile.version in ids: self.ver.setCurrentText(profile.version)
+        if profile and profile.version in ids:
+            self.ver.setCurrentText(profile.version)
         g1.addWidget(self.ver, 1, 1)
         g1.addWidget(QLabel("Loader"), 2, 0)
         self.loader = QComboBox()
@@ -317,7 +332,8 @@ class ProfileDialog(QDialog):
     def _find_java(self):
         javas = find_javas()
         if not javas:
-            QMessageBox.information(self, "No Java", "No Java installations detected.")
+            QMessageBox.information(self, "No Java",
+                                    "No Java installations detected.")
             return
         items = [f"{label}  —  {path}" for path, (label, _) in javas]
         choice, ok = QInputDialog.getItem(self, "Select Java",

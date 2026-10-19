@@ -1,7 +1,7 @@
 import os, json, zipfile, subprocess, platform, re
 from pathlib import Path
-import requests
 from core.paths import MC_ROOT, NO_WINDOW
+from integration import http
 
 FABRIC_META    = "https://meta.fabricmc.net/v2"
 QUILT_META     = "https://meta.quiltmc.org/v3"
@@ -21,8 +21,10 @@ def install(loader, mc_version, log=None, progress=None, progress_end=None):
     try:
         if loader == "fabric":   return _install_fabric(mc_version, L)
         if loader == "quilt":    return _install_quilt(mc_version, L)
-        if loader == "forge":    return _install_forge(mc_version, L, progress, progress_end)
-        if loader == "neoforge": return _install_neoforge(mc_version, L, progress, progress_end)
+        if loader == "forge":    return _install_forge(
+            mc_version, L, progress, progress_end)
+        if loader == "neoforge": return _install_neoforge(
+            mc_version, L, progress, progress_end)
         L("error", f"unknown loader: {loader}"); return None
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -35,7 +37,7 @@ def _install_fabric(mc_version, L):
         L("ok", f"fabric already installed → {existing}"); return existing
     L("net", f"GET {FABRIC_META}/versions/loader/{mc_version}")
     try:
-        r = requests.get(f"{FABRIC_META}/versions/loader/{mc_version}", timeout=20)
+        r = http.get(f"{FABRIC_META}/versions/loader/{mc_version}")
         r.raise_for_status(); data = r.json()
     except Exception as e:
         L("error", f"fabric meta fetch failed: {e}"); return None
@@ -45,7 +47,7 @@ def _install_fabric(mc_version, L):
     L("java", f"fabric-loader {loader_ver}")
     url = f"{FABRIC_META}/versions/loader/{mc_version}/{loader_ver}/profile/json"
     try:
-        r = requests.get(url, timeout=20); r.raise_for_status()
+        r = http.get(url); r.raise_for_status()
         profile = r.json()
     except Exception as e:
         L("error", f"fabric profile fetch failed: {e}"); return None
@@ -60,7 +62,7 @@ def _install_quilt(mc_version, L):
     if existing:
         L("ok", f"quilt already installed → {existing}"); return existing
     try:
-        r = requests.get(f"{QUILT_META}/versions/loader/{mc_version}", timeout=20)
+        r = http.get(f"{QUILT_META}/versions/loader/{mc_version}")
         r.raise_for_status(); data = r.json()
     except Exception as e:
         L("error", f"quilt meta failed: {e}"); return None
@@ -70,7 +72,7 @@ def _install_quilt(mc_version, L):
     L("java", f"quilt-loader {loader_ver}")
     url = f"{QUILT_META}/versions/loader/{mc_version}/{loader_ver}/profile/json"
     try:
-        r = requests.get(url, timeout=20); r.raise_for_status()
+        r = http.get(url); r.raise_for_status()
         profile = r.json()
     except Exception as e:
         L("error", f"quilt profile failed: {e}"); return None
@@ -85,7 +87,7 @@ def _install_forge(mc_version, L, progress, progress_end):
     if existing:
         L("ok", f"forge already installed → {existing}"); return existing
     try:
-        r = requests.get(FORGE_PROMOS, timeout=20); r.raise_for_status()
+        r = http.get(FORGE_PROMOS); r.raise_for_status()
         promos = r.json().get("promos", {})
     except Exception as e:
         L("error", f"forge promos failed: {e}"); return None
@@ -120,7 +122,7 @@ def _install_neoforge(mc_version, L, progress, progress_end):
         L("error", f"neoforge: unsupported MC version {mc_version}"); return None
     prefix = f"{parts[1]}.{parts[2] if len(parts) > 2 else '0'}"
     try:
-        r = requests.get(NEOFORGE_META, timeout=20); r.raise_for_status()
+        r = http.get(NEOFORGE_META); r.raise_for_status()
         versions = re.findall(r"<version>([^<]+)</version>", r.text)
     except Exception as e:
         L("error", f"neoforge metadata failed: {e}"); return None
@@ -131,7 +133,8 @@ def _install_neoforge(mc_version, L, progress, progress_end):
     L("java", f"neoforge {nver}")
     jar_name = f"neoforge-{nver}-installer.jar"
     url = f"{NEOFORGE_MAVEN}/{nver}/neoforge-{nver}-installer.jar"
-    jar = _download_installer(url, jar_name, L, progress, progress_end, "neoforge")
+    jar = _download_installer(url, jar_name, L, progress, progress_end,
+                              "neoforge")
     if not jar: return None
     java = _java_bin(L)
     if not java: return None
@@ -167,10 +170,10 @@ def _download_libraries(libs, L, label="libraries"):
         if p.exists() and p.stat().st_size > 0: continue
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
-            with requests.get(art["url"], stream=True, timeout=60) as r:
+            with http.stream("GET", art["url"]) as r:
                 r.raise_for_status()
                 with open(p, "wb") as f:
-                    for chunk in r.iter_content(65536): f.write(chunk)
+                    for chunk in r.iter_bytes(65536): f.write(chunk)
         except Exception as e:
             L("error", f"lib failed {art['path'][-50:]}: {e}")
         if i % 5 == 0: L("sys", f"{label} libs {i}/{len(libs)}")
@@ -193,12 +196,12 @@ def _download_installer(url, jar_name, L, progress, progress_end, label):
         L("sys", f"{jar_name} already downloaded"); return jar
     L("net", f"downloading {jar_name}")
     try:
-        with requests.get(url, stream=True, timeout=180) as r:
+        with http.stream("GET", url) as r:
             r.raise_for_status()
             total = int(r.headers.get("content-length", 0))
             done = 0
             with open(jar, "wb") as f:
-                for chunk in r.iter_content(65536):
+                for chunk in r.iter_bytes(65536):
                     f.write(chunk); done += len(chunk)
                     if progress and total:
                         progress(label, done, total, "", "")
@@ -221,8 +224,10 @@ def _run_installer(java, jar, L):
     L("sys", f"spawn: {' '.join(str(c) for c in cmd)}")
     try:
         proc = subprocess.Popen(cmd, cwd=str(jar.parent),
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, bufsize=1, creationflags=NO_WINDOW)
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT,
+                                text=True, bufsize=1,
+                                creationflags=NO_WINDOW)
     except Exception as e:
         L("error", f"installer spawn failed: {e}"); return -1
     for line in proc.stdout:

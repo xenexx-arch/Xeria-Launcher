@@ -1,7 +1,7 @@
 import time
 from datetime import datetime
-from PyQt5.QtGui import QFont, QTextCursor
-from PyQt5.QtWidgets import QPlainTextEdit
+from PyQt6.QtGui import QFont, QTextCursor
+from PyQt6.QtWidgets import QPlainTextEdit
 from core import theme
 
 
@@ -16,7 +16,7 @@ class Console(QPlainTextEdit):
         self.setReadOnly(True)
         self.setFont(QFont(theme.MONO_FONT, 9))
         self.restyle()
-        self.setMaximumBlockCount(4000)
+        self.setMaximumBlockCount(3000)
         self._last_progress = False
         self._t0 = time.time()
 
@@ -26,7 +26,9 @@ class Console(QPlainTextEdit):
             f"border:none;border-radius:0;padding:6px}}")
 
     def _esc(self, s):
-        return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return (str(s).replace("&", "&amp;")
+                       .replace("<", "&lt;")
+                       .replace(">", "&gt;"))
 
     def _write(self, html):
         self.appendHtml(html)
@@ -45,9 +47,10 @@ class Console(QPlainTextEdit):
                  "error": theme.RED, "java": theme.CYAN,
                  "net": theme.BLUE, "sys": theme.PURPLE,
                  "mc": theme.FG}.get(tag, theme.CYAN)
-        self._write(f'<span style="color:{theme.GRAY}">[{ts} {rel:>7}]</span> '
-                    f'<span style="color:{color};font-weight:bold">{t}</span> '
-                    f'<span style="color:{theme.FG}">{self._esc(msg)}</span>')
+        self._write(
+            f'<span style="color:{theme.GRAY}">[{ts} {rel:>7}]</span> '
+            f'<span style="color:{color};font-weight:bold">{t}</span> '
+            f'<span style="color:{theme.FG}">{self._esc(msg)}</span>')
         self._last_progress = False
 
     def _progress(self, label, cur, total, extra, speed):
@@ -55,20 +58,25 @@ class Console(QPlainTextEdit):
         pct = cur * 100 / total
         w = 30
         fill = int(w * cur / total)
-        bar = "=" * fill + (">" if fill < w else "") + " " * (w - fill - (0 if fill >= w else 1))
+        bar = "=" * fill + (">" if fill < w else "") + \
+              " " * (w - fill - (0 if fill >= w else 1))
         bar = bar[:w]
-        color = theme.GREEN if pct >= 99 else (theme.YELLOW if pct >= 50 else theme.CYAN)
+        color = (theme.GREEN if pct >= 99
+                 else (theme.YELLOW if pct >= 50 else theme.CYAN))
         ts = datetime.now().strftime("%H:%M:%S")
-        html = (f'<span style="color:{theme.GRAY}">[{ts}]</span> '
-                f'<span style="color:{theme.GREEN};font-weight:bold">  DL</span> '
-                f'<span style="color:{theme.FG}">{self._esc(label)[:22]:<22}</span>'
-                f'<span style="color:{color}">[{bar}]</span> '
-                f'<span style="color:{color};font-weight:bold">{pct:5.1f}%</span> '
-                f'<span style="color:{theme.GRAY}">{self._esc(speed):>10}</span>')
+        html = (
+            f'<span style="color:{theme.GRAY}">[{ts}]</span> '
+            f'<span style="color:{theme.GREEN};font-weight:bold">  DL</span> '
+            f'<span style="color:{theme.FG}">'
+            f'{self._esc(label)[:22]:<22}</span>'
+            f'<span style="color:{color}">[{bar}]</span> '
+            f'<span style="color:{color};font-weight:bold">{pct:5.1f}%</span> '
+            f'<span style="color:{theme.GRAY}">'
+            f'{self._esc(speed):>10}</span>')
         if self._last_progress:
             c = self.textCursor()
-            c.movePosition(QTextCursor.End)
-            c.select(QTextCursor.BlockUnderCursor)
+            c.movePosition(QTextCursor.MoveOperation.End)
+            c.select(QTextCursor.SelectionType.BlockUnderCursor)
             c.removeSelectedText()
             c.deletePreviousChar()
         self._write(html)
@@ -83,7 +91,7 @@ class MiniConsole(QPlainTextEdit):
         self.setReadOnly(True)
         self.setFont(QFont(theme.MONO_FONT, 8))
         self.restyle()
-        self.setMaximumBlockCount(500)
+        self.setMaximumBlockCount(400)
 
     def restyle(self):
         self.setStyleSheet(
@@ -95,7 +103,8 @@ class MiniConsole(QPlainTextEdit):
             label, cur, total, extra, speed = msg
             ts = datetime.now().strftime("%H:%M:%S")
             pct = int(cur * 100 / max(total, 1))
-            self.appendPlainText(f"[{ts}] DL {label[:22]:<22} {pct:3d}% {speed}")
+            self.appendPlainText(
+                f"[{ts}] DL {label[:22]:<22} {pct:3d}% {speed}")
         elif tag == "progress_end":
             return
         else:

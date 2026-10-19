@@ -2,18 +2,20 @@ import time
 import json
 from pathlib import Path
 from urllib.parse import urlencode
-import requests
-from PyQt5.QtCore import Qt, QTimer, QSize, QUrl
-from PyQt5.QtGui import QIcon
-from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest
-from PyQt5.QtWidgets import (
+import httpx
+from PyQt6.QtCore import Qt, QTimer, QSize, QUrl
+from PyQt6.QtGui import QIcon
+from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QLineEdit, QListWidget, QListWidgetItem, QWidget,
     QPushButton, QMessageBox, QStyle,
 )
 from core import theme
+from core import hardware
 from core.worker import Worker
 from ui.console import MiniConsole
+from integration import http
 
 from browse.common import (
     ICON_SIZE_ROW, _ICON_CACHE, make_placeholder,
@@ -21,6 +23,9 @@ from browse.common import (
     square_icon, square_icon_pixmap,
 )
 from browse.detail import DetailPanel
+
+
+HW = hardware.get()
 
 
 class BrowseBase(QDialog):
@@ -85,7 +90,7 @@ class BrowseBase(QDialog):
             f"border:none;padding:8px}}")
         search_ic = QIcon.fromTheme("edit-find")
         if not search_ic.isNull():
-            self.search.addAction(search_ic, QLineEdit.LeadingPosition)
+            self.search.addAction(search_ic, QLineEdit.ActionPosition.LeadingPosition)
         row.addWidget(self.search, 1)
         v.addLayout(row)
 
@@ -98,11 +103,12 @@ class BrowseBase(QDialog):
         ll.setContentsMargins(0, 0, 0, 0); ll.setSpacing(4)
 
         self.list = QListWidget()
-        self.list.setFrameShape(QFrame.NoFrame)
-        self.list.setSelectionMode(QListWidget.SingleSelection)
+        self.list.setFrameShape(QFrame.Shape.NoFrame)
+        self.list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.list.setIconSize(QSize(ICON_SIZE_ROW, ICON_SIZE_ROW))
-        self.list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
-        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.setStyleSheet(
             f"QListWidget{{background:{theme.BG2};color:{theme.FG};"
             f"border:none;padding:0;outline:0}}"
@@ -119,7 +125,7 @@ class BrowseBase(QDialog):
         ll.addWidget(self.list, 1)
 
         self.log_frame = QFrame()
-        self.log_frame.setFrameShape(QFrame.NoFrame)
+        self.log_frame.setFrameShape(QFrame.Shape.NoFrame)
         self.log_frame.setStyleSheet(
             f"QFrame{{background:{theme.BG2};border:none}}")
         lfl = QVBoxLayout(self.log_frame)
@@ -150,14 +156,14 @@ class BrowseBase(QDialog):
 
         btns = QHBoxLayout(); btns.setSpacing(6)
         refresh = QPushButton("Refresh")
-        refresh.setIcon(self._icon("view-refresh", QStyle.SP_BrowserReload))
+        refresh.setIcon(self._icon("view-refresh", QStyle.StandardPixmap.SP_BrowserReload))
         refresh.setIconSize(QSize(16, 16))
         refresh.setStyleSheet(self._btn_style())
         refresh.clicked.connect(self.search_now)
         btns.addWidget(refresh); btns.addStretch()
 
         self.install_btn = QPushButton("Install Selected")
-        self.install_btn.setIcon(self._icon("download", QStyle.SP_ArrowDown))
+        self.install_btn.setIcon(self._icon("download", QStyle.StandardPixmap.SP_ArrowDown))
         self.install_btn.setIconSize(QSize(16, 16))
         self.install_btn.setStyleSheet(
             f"QPushButton{{background:{theme.ACCENT};color:{theme.on_accent()};"
@@ -258,8 +264,10 @@ class BrowseBase(QDialog):
         url, params = self._search_url(q)
         full = f"{url}?{urlencode(params)}"
         req = QNetworkRequest(QUrl(full))
-        req.setAttribute(QNetworkRequest.FollowRedirectsAttribute, True)
-        req.setRawHeader(b"User-Agent", b"Xeria-Launcher/1.0")
+        req.setAttribute(
+            QNetworkRequest.Attribute.RedirectPolicyAttribute,
+            QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy)
+        req.setRawHeader(b"User-Agent", b"Xeria-Launcher/2.504")
         self._log("net", f"query '{q}' ({self.KIND})")
         reply = self._nam.get(req)
         self._search_reply = reply
@@ -270,12 +278,13 @@ class BrowseBase(QDialog):
             try: reply.deleteLater()
             except Exception: pass
             return
-        status = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
+        status = reply.attribute(
+            QNetworkRequest.Attribute.HttpStatusCodeAttribute)
         data = reply.readAll()
         err = reply.error()
         reply.deleteLater()
         self._search_reply = None
-        if err != 0 or status != 200:
+        if err != QNetworkReply.NetworkError.NoError or status != 200:
             self._log("error", f"search failed: status={status}")
             return
         try:
@@ -319,8 +328,8 @@ class BrowseBase(QDialog):
 
             it = QListWidgetItem()
             it.setSizeHint(QSize(0, self._row_height()))
-            it.setData(Qt.UserRole + 1, h.get("id") or h.get("project_id"))
-            it.setData(Qt.UserRole + 2, is_installed)
+            it.setData(Qt.ItemDataRole.UserRole + 1, h.get("id") or h.get("project_id"))
+            it.setData(Qt.ItemDataRole.UserRole + 2, is_installed)
             self.list.addItem(it)
 
             row = self._make_row(h, is_installed)
@@ -339,13 +348,23 @@ class BrowseBase(QDialog):
     def _request_visible_icons(self, *args):
         if not self.results_data:
             return
-        first = self.list.indexAt(self.list.rect().topLeft()).row()
-        last = self.list.indexAt(self.list.rect().bottomLeft()).row()
-        if first < 0:
-            first = 0
-        if last < 0:
-            last = len(self.results_data) - 1
-        for i in range(max(0, first), min(len(self.results_data), last + 2)):
+        if not HW.prefetch_icons:
+            first = self.list.currentRow()
+            if first < 0:
+                first = 0
+            last = first
+        else:
+            first = self.list.indexAt(self.list.rect().topLeft()).row()
+            last = self.list.indexAt(self.list.rect().bottomLeft()).row()
+            if first < 0:
+                first = 0
+            if last < 0:
+                last = len(self.results_data) - 1
+            first = max(0, first - HW.icon_prefetch_ahead)
+            last = min(len(self.results_data), last + HW.icon_prefetch_ahead + 1)
+        for i in range(first, last):
+            if i < 0 or i >= len(self.results_data):
+                continue
             pid = (self.results_data[i].get("id") or
                    self.results_data[i].get("project_id"))
             if pid:
@@ -364,7 +383,7 @@ class BrowseBase(QDialog):
 
         ic = QLabel()
         ic.setFixedSize(ICON_SIZE_ROW, ICON_SIZE_ROW)
-        ic.setAlignment(Qt.AlignCenter)
+        ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ph = make_placeholder(ICON_SIZE_ROW).pixmap(
             ICON_SIZE_ROW, ICON_SIZE_ROW)
         ic.setPixmap(square_icon_pixmap(ph, ICON_SIZE_ROW))
@@ -376,7 +395,7 @@ class BrowseBase(QDialog):
         ic_col.setContentsMargins(0, 0, 0, 0)
         ic_col.setSpacing(0)
         ic_col.addStretch(1)
-        ic_col.addWidget(ic, 0, Qt.AlignHCenter)
+        ic_col.addWidget(ic, 0, Qt.AlignmentFlag.AlignHCenter)
         ic_col.addStretch(1)
         h.addWidget(ic_host, 0)
 
@@ -434,7 +453,7 @@ class BrowseBase(QDialog):
             self.icon_loader.request(pid)
 
         self.detail.open_for(hit)
-        if pid and pid in _ICON_CACHE:
+        if pid and HW.enable_icon_cache and pid in _ICON_CACHE:
             self.detail.set_icon(_ICON_CACHE[pid])
 
         if pid:
@@ -468,10 +487,15 @@ class BrowseBase(QDialog):
         self._log("info", f"installing {hit['title']}")
         w = Worker(lambda log, progress, progress_end:
                    self._install(hit, progress, progress_end))
-        w.log.connect(self._log, Qt.QueuedConnection)
-        w.progress.connect(lambda *a: self._log("progress", a), Qt.QueuedConnection)
-        w.progress_end.connect(lambda: None, Qt.QueuedConnection)
-        w.done.connect(lambda p: self._install_done(hit, p), Qt.QueuedConnection)
+        w.log.connect(self._log, Qt.ConnectionType.QueuedConnection)
+        w.progress.connect(
+            lambda *a: self._log("progress", a),
+            Qt.ConnectionType.QueuedConnection)
+        w.progress_end.connect(
+            lambda: None, Qt.ConnectionType.QueuedConnection)
+        w.done.connect(
+            lambda p: self._install_done(hit, p),
+            Qt.ConnectionType.QueuedConnection)
         self._w = w; w.start()
 
     def _install(self, hit, progress, progress_end):
@@ -481,12 +505,12 @@ class BrowseBase(QDialog):
         url, filename = picked
         dest = self.profile.dir / self.FOLDER / filename
         dest.parent.mkdir(parents=True, exist_ok=True)
-        with requests.get(url, stream=True, timeout=120) as resp:
+        with http.stream("GET", url) as resp:
             resp.raise_for_status()
             total = int(resp.headers.get("content-length", 0))
             done = 0; b0 = 0; tl = time.time()
             with open(dest, "wb") as f:
-                for chunk in resp.iter_content(65536):
+                for chunk in resp.iter_bytes(65536):
                     f.write(chunk); done += len(chunk)
                     now = time.time()
                     if now - tl >= 0.2 or done == total:

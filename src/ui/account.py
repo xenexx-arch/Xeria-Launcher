@@ -1,6 +1,6 @@
-from PyQt5.QtCore import QSize, Qt, QPoint, QRect
-from PyQt5.QtGui import QColor, QFont, QPen
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QSize, Qt, QPoint, QRect
+from PyQt6.QtGui import QColor, QFont, QPen
+from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QListWidget, QListWidgetItem, QInputDialog, QMessageBox, QMenu,
     QApplication, QFrame, QStyledItemDelegate, QStyle,
@@ -21,12 +21,12 @@ class _AccountItemDelegate(QStyledItemDelegate):
 
         row = option.rect.adjusted(0, ROW_GAP // 2, 0, -ROW_GAP // 2)
 
-        if option.state & QStyle.State_Selected:
+        if option.state & QStyle.StateFlag.State_Selected:
             painter.fillRect(row, QColor(theme.BG3))
-        elif option.state & QStyle.State_MouseOver:
+        elif option.state & QStyle.StateFlag.State_MouseOver:
             painter.fillRect(row, QColor(theme.BG3))
 
-        text = index.data(Qt.DisplayRole) or ""
+        text = index.data(Qt.ItemDataRole.DisplayRole) or ""
         if not text:
             painter.restore()
             return
@@ -37,14 +37,16 @@ class _AccountItemDelegate(QStyledItemDelegate):
         r = row.adjusted(10, ROW_PAD_V // 2, -10, -ROW_PAD_V // 2)
 
         painter.setPen(QPen(QColor(theme.FG)))
-        painter.drawText(r, Qt.AlignLeft | Qt.AlignVCenter, text)
+        painter.drawText(r, Qt.AlignmentFlag.AlignLeft |
+                         Qt.AlignmentFlag.AlignVCenter, text)
 
         marker = text[0]
         marker_w = fm.horizontalAdvance(marker)
         y = r.top() + (r.height() - fm.height()) // 2
         mrect = QRect(r.left(), y, marker_w + 1, fm.height())
         painter.setPen(QPen(QColor(theme.ACCENT)))
-        painter.drawText(mrect, Qt.AlignLeft | Qt.AlignVCenter, marker)
+        painter.drawText(mrect, Qt.AlignmentFlag.AlignLeft |
+                         Qt.AlignmentFlag.AlignVCenter, marker)
 
         painter.restore()
 
@@ -100,9 +102,10 @@ class AccountView(QWidget):
         self.list = QListWidget()
         self.list.setFont(QFont(theme.UI_FONT, LIST_FONT_SIZE))
         self.list.setWordWrap(False)
-        self.list.setTextElideMode(Qt.ElideRight)
-        self.list.setSelectionMode(QListWidget.SingleSelection)
-        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self.list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._on_ctx)
         self.list.setItemDelegate(_AccountItemDelegate(self.list))
         self.list.setSpacing(0)
@@ -194,7 +197,7 @@ class AccountView(QWidget):
         m.addAction("Rename", self._rename_current)
         m.addSeparator()
         m.addAction("Remove", self._remove_current)
-        m.exec_(self.list.mapToGlobal(pos))
+        m.exec(self.list.mapToGlobal(pos))
 
     def _use_current(self):
         row = self.list.currentRow()
@@ -241,8 +244,10 @@ class AccountView(QWidget):
         if not (0 <= row < len(accs)):
             return
         a = accs[row]
-        if QMessageBox.question(self, "Remove",
-            f"Remove account '{a.get('name')}'?") != QMessageBox.Yes:
+        if QMessageBox.question(
+            self, "Remove",
+            f"Remove account '{a.get('name')}'?"
+        ) != QMessageBox.StandardButton.Yes:
             self._unstick()
             return
         del accs[row]
@@ -268,7 +273,8 @@ class AccountView(QWidget):
             self._add_online()
 
     def _add_offline(self):
-        name, ok = QInputDialog.getText(self, "Offline account", "Username:")
+        name, ok = QInputDialog.getText(self, "Offline account",
+                                        "Username:")
         if not ok or not name.strip():
             self._unstick()
             return
@@ -282,7 +288,7 @@ class AccountView(QWidget):
         self._unstick()
 
     def _add_online(self):
-        self._log("info", "starting Microsoft sign-in…")
+        self._log("info", "starting Microsoft sign-in")
         try:
             new = auth.sign_in_webview(parent=self, log=self._log)
         except Exception as e:

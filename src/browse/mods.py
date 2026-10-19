@@ -9,7 +9,7 @@ class ModsDialog(BrowseBase):
     FOLDER = "mods"
     SEARCH_PH = "Search mods..."
     HEADER_ICON = "system-software-install"
-    VANILLA_WARN = "⚠  This profile is vanilla — mods won't load."
+    VANILLA_WARN = "This profile is vanilla — mods will not load."
 
     def _search_url(self, query):
         facets = [["project_type:mod"]]

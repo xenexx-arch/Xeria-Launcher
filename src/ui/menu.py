@@ -1,16 +1,21 @@
 import platform
 from pathlib import Path
 
-from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QComboBox, QGridLayout, QTabWidget,
     QPlainTextEdit, QMessageBox, QInputDialog, QFileDialog,
 )
 from core import theme
+from core import hardware
 from core.paths import IS_WIN, MC_ROOT, XERIA_ROOT
 from core.java import find_javas, best_java
 from ui.helpers import s_btn, s_tabs, s_combo, s_textedit
+
+
+GITHUB_URL = "https://github.com/xenexx-arch/Xeria-Launcher/tree/main"
+APP_VERSION = "v2.504"
 
 
 class MenuView(QWidget):
@@ -118,14 +123,20 @@ class MenuView(QWidget):
 
         ab = QWidget(); ga = QVBoxLayout(ab)
         ga.setContentsMargins(14, 14, 14, 14); ga.setSpacing(6)
+        hw = hardware.get()
         for label, value in (
-            ("Launcher", "Xeria 2.1"),
+            ("Launcher", f"Xeria {APP_VERSION}"),
+            ("Hardware", hw.summary()),
             ("Platform", f"{platform.system()} {platform.release()}"),
             ("Python", platform.python_version()),
             ("Minecraft root", str(MC_ROOT)),
             ("Config", str(XERIA_ROOT)),
         ):
             ga.addWidget(QLabel(f"<b>{label}:</b> {value}"))
+        link = QLabel(
+            f"<b>GitHub:</b> <a href='{GITHUB_URL}'>{GITHUB_URL}</a>")
+        link.setOpenExternalLinks(True)
+        ga.addWidget(link)
         ga.addStretch()
         self.tabs.addTab(ab, "About")
 

@@ -3,15 +3,16 @@ import json
 import hashlib
 from pathlib import Path
 
-from PyQt5.QtCore import (
+from PyQt6.QtCore import (
     Qt, QTimer, QUrl, QObject, pyqtSignal, QRunnable, QThreadPool, pyqtSlot,
 )
-from PyQt5.QtGui import (
+from PyQt6.QtGui import (
     QColor, QIcon, QPixmap, QPainter, QPainterPath, QImage,
 )
-from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
+from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 from core import theme
+from core import hardware
 
 try:
     from PIL import Image
@@ -27,8 +28,11 @@ SHOT_W = 200
 SHOT_H = 112
 DETAIL_WIDTH = 400
 
+HW = hardware.get()
+
 CACHE_DIR = Path.home() / ".cache" / "mc_launcher" / "icons"
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
+if HW.enable_disk_cache:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 CDN_BASE = "https://cdn.modrinth.com/data/{id}/icon.png"
 API_BASE = "https://api.modrinth.com/v2/project/{id}"
@@ -47,14 +51,14 @@ def _pid_hash(pid):
 
 def make_placeholder(size=ICON_SIZE):
     pm = QPixmap(size, size)
-    pm.fill(Qt.transparent)
+    pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
     path = QPainterPath()
     path.addRoundedRect(0, 0, size, size, 4, 4)
     p.fillPath(path, QColor(theme.BG3))
     p.setPen(QColor(theme.GRAY))
-    p.drawText(pm.rect(), Qt.AlignCenter, "?")
+    p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, "?")
     p.end()
     return QIcon(pm)
 
@@ -65,14 +69,11 @@ def decode_image(data):
     pm = QPixmap()
     if pm.loadFromData(data) and not pm.isNull():
         return pm
-    for fmt in (b"PNG", b"JPG", b"JPEG", b"BMP", b"GIF", b"WEBP"):
-        if pm.loadFromData(data, fmt) and not pm.isNull():
-            return pm
     if _HAS_PIL:
         try:
             img = Image.open(io.BytesIO(bytes(data))).convert("RGBA")
             qimg = QImage(img.tobytes(), img.width, img.height,
-                          QImage.Format_RGBA8888).copy()
+                          QImage.Format.Format_RGBA8888).copy()
             pm2 = QPixmap.fromImage(qimg)
             if not pm2.isNull():
                 return pm2
@@ -84,12 +85,12 @@ def decode_image(data):
 def _crop_alpha_bbox(pm):
     if pm is None or pm.isNull():
         return pm
-    img = pm.toImage().convertToFormat(QImage.Format_ARGB32)
+    img = pm.toImage().convertToFormat(QImage.Format.Format_ARGB32)
     w, h = img.width(), img.height()
     if w == 0 or h == 0:
         return pm
     ptr = img.bits()
-    ptr.setsize(img.byteCount())
+    ptr.setsize(img.sizeInBytes())
     buf = bytes(ptr)
     bpl = img.bytesPerLine()
     minx, miny, maxx, maxy = w, h, -1, -1
@@ -118,13 +119,13 @@ def square_icon_pixmap(src, side):
         y = (h - s) // 2
         src = src.copy(x, y, s, s)
     canvas = QPixmap(side, side)
-    canvas.fill(Qt.transparent)
+    canvas.fill(Qt.GlobalColor.transparent)
     p = QPainter(canvas)
-    p.setRenderHint(QPainter.Antialiasing)
-    p.setRenderHint(QPainter.SmoothPixmapTransform)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
     scaled = src.scaled(side, side,
-                        Qt.IgnoreAspectRatio,
-                        Qt.SmoothTransformation)
+                        Qt.AspectRatioMode.IgnoreAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation)
     p.drawPixmap(0, 0, scaled)
     p.end()
     return canvas
@@ -169,7 +170,7 @@ class IconLoader(QObject):
     icon_ready = pyqtSignal(str, QIcon)
     _decode_done = pyqtSignal(str, object, object)
 
-    MAX_PARALLEL = 4
+    MAX_PARALLEL = HW.icon_max_parallel
     MAX_ATTEMPTS = 2
 
     def __init__(self, parent=None, nam=None):
@@ -178,28 +179,32 @@ class IconLoader(QObject):
         self._queue = []
         self._active = {}
         self._inflight = set()
-        self._cache = _ICON_CACHE
+        self._cache = _ICON_CACHE if HW.enable_icon_cache else {}
         self._pool = QThreadPool(self)
-        self._pool.setMaxThreadCount(2)
+        self._pool.setMaxThreadCount(HW.icon_decode_threads)
         self._decode_done.connect(self._on_decode_done)
 
     def request(self, project_id):
         if not project_id:
             return
-        if project_id in self._cache:
+        if HW.enable_icon_cache and project_id in self._cache:
             self.icon_ready.emit(project_id, self._cache[project_id])
             return
         if project_id in self._inflight:
             return
-        h = _pid_hash(project_id)
-        path = CACHE_DIR / f"{h}.png"
-        if path.exists():
-            pm = QPixmap(str(path))
-            if not pm.isNull():
-                ic = QIcon(pm)
-                self._cache[project_id] = ic
-                self.icon_ready.emit(project_id, ic)
-                return
+        if HW.enable_disk_cache:
+            h = _pid_hash(project_id)
+            path = CACHE_DIR / f"{h}.png"
+            if path.exists():
+                pm = QPixmap(str(path))
+                if not pm.isNull():
+                    ic = QIcon(pm)
+                    if HW.enable_icon_cache:
+                        self._cache[project_id] = ic
+                    self.icon_ready.emit(project_id, ic)
+                    return
+        else:
+            path = None
         self._inflight.add(project_id)
         self._queue.append((project_id, path, 0))
         self._pump()
@@ -209,10 +214,14 @@ class IconLoader(QObject):
             project_id, path, attempt = self._queue.pop(0)
             url = CDN_BASE.format(id=project_id)
             req = QNetworkRequest(QUrl(url))
-            req.setAttribute(QNetworkRequest.FollowRedirectsAttribute, True)
-            req.setAttribute(QNetworkRequest.CacheLoadControlAttribute,
-                             QNetworkRequest.PreferCache)
-            req.setRawHeader(b"User-Agent", b"Xeria-Launcher/1.0")
+            req.setAttribute(
+                QNetworkRequest.Attribute.RedirectPolicyAttribute,
+                QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy)
+            if HW.enable_disk_cache:
+                req.setAttribute(
+                    QNetworkRequest.Attribute.CacheLoadControlAttribute,
+                    QNetworkRequest.CacheLoadControl.PreferCache)
+            req.setRawHeader(b"User-Agent", b"Xeria-Launcher/2.504")
             reply = self.nam.get(req)
             self._active[reply] = [project_id, path, attempt, False]
             reply.finished.connect(lambda r=reply: self._on_cdn_finished(r))
@@ -223,7 +232,8 @@ class IconLoader(QObject):
             try: reply.deleteLater()
             except Exception: pass
             return None, None, None
-        status = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
+        status = reply.attribute(
+            QNetworkRequest.Attribute.HttpStatusCodeAttribute)
         err = reply.error()
         data = reply.readAll()
         reply.deleteLater()
@@ -236,13 +246,16 @@ class IconLoader(QObject):
         self._inflight.discard(project_id)
         if pm is None or pm.isNull():
             ph = make_placeholder(ICON_SIZE_DETAIL)
-            self._cache[project_id] = ph
+            if HW.enable_icon_cache:
+                self._cache[project_id] = ph
             self.icon_ready.emit(project_id, ph)
             return
         ic = QIcon(pm)
-        self._cache[project_id] = ic
-        try: pm.save(str(path), "PNG")
-        except Exception: pass
+        if HW.enable_icon_cache:
+            self._cache[project_id] = ic
+        if HW.enable_disk_cache and path is not None:
+            try: pm.save(str(path), "PNG")
+            except Exception: pass
         self.icon_ready.emit(project_id, ic)
 
     def _backoff(self, project_id, path, attempt):
@@ -262,7 +275,8 @@ class IconLoader(QObject):
     def _emit_placeholder(self, project_id):
         self._inflight.discard(project_id)
         ph = make_placeholder(ICON_SIZE_DETAIL)
-        self._cache[project_id] = ph
+        if HW.enable_icon_cache:
+            self._cache[project_id] = ph
         self.icon_ready.emit(project_id, ph)
 
     def _on_cdn_finished(self, reply):
@@ -271,7 +285,7 @@ class IconLoader(QObject):
             self._pump(); return
         project_id, path, attempt, tried_api = meta
         err, data = payload
-        if err == QNetworkReply.NoError and status == 200:
+        if err == QNetworkReply.NetworkError.NoError and status == 200:
             self._dispatch_decode(project_id, path, data)
             self._pump(); return
         if status in (429, 503) or (status and 500 <= status < 600):
@@ -288,8 +302,10 @@ class IconLoader(QObject):
     def _fetch_via_api(self, project_id, path, attempt):
         api = API_BASE.format(id=project_id)
         req = QNetworkRequest(QUrl(api))
-        req.setAttribute(QNetworkRequest.FollowRedirectsAttribute, True)
-        req.setRawHeader(b"User-Agent", b"Xeria-Launcher/1.0")
+        req.setAttribute(
+            QNetworkRequest.Attribute.RedirectPolicyAttribute,
+            QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy)
+        req.setRawHeader(b"User-Agent", b"Xeria-Launcher/2.504")
         reply = self.nam.get(req)
         self._active[reply] = [project_id, path, attempt, True]
         reply.finished.connect(lambda r=reply: self._on_api_finished(r))
@@ -305,7 +321,7 @@ class IconLoader(QObject):
                 self._pump(); return
             self._emit_placeholder(project_id)
             self._pump(); return
-        if err != QNetworkReply.NoError:
+        if err != QNetworkReply.NetworkError.NoError:
             self._emit_placeholder(project_id)
             self._pump(); return
         try:
@@ -317,8 +333,10 @@ class IconLoader(QObject):
             self._emit_placeholder(project_id)
             self._pump(); return
         req = QNetworkRequest(QUrl(icon_url))
-        req.setAttribute(QNetworkRequest.FollowRedirectsAttribute, True)
-        req.setRawHeader(b"User-Agent", b"Xeria-Launcher/1.0")
+        req.setAttribute(
+            QNetworkRequest.Attribute.RedirectPolicyAttribute,
+            QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy)
+        req.setRawHeader(b"User-Agent", b"Xeria-Launcher/2.504")
         rep = self.nam.get(req)
         self._active[rep] = [project_id, path, attempt, True]
         rep.finished.connect(lambda r=rep: self._on_icon_finished(r))
@@ -329,7 +347,7 @@ class IconLoader(QObject):
             self._pump(); return
         project_id, path, attempt, _ = meta
         err, data = payload
-        if err == QNetworkReply.NoError and status == 200:
+        if err == QNetworkReply.NetworkError.NoError and status == 200:
             self._dispatch_decode(project_id, path, data)
             self._pump(); return
         self._emit_placeholder(project_id)
@@ -340,14 +358,14 @@ class GalleryLoader(QObject):
     shot_ready = pyqtSignal(str, int, object)
     _decode_done = pyqtSignal(str, int, object)
 
-    MAX_SHOTS = 6
+    MAX_SHOTS = HW.gallery_max_shots
 
     def __init__(self, parent=None, nam=None):
         super().__init__(parent)
         self.nam = nam or QNetworkAccessManager(self)
         self._requested = set()
         self._pool = QThreadPool(self)
-        self._pool.setMaxThreadCount(2)
+        self._pool.setMaxThreadCount(HW.gallery_decode_threads)
         self._decode_done.connect(self._on_decode_done)
 
     def request(self, project_id):
@@ -355,18 +373,21 @@ class GalleryLoader(QObject):
             return
         self._requested.add(project_id)
         req = QNetworkRequest(QUrl(API_BASE.format(id=project_id)))
-        req.setAttribute(QNetworkRequest.FollowRedirectsAttribute, True)
-        req.setRawHeader(b"User-Agent", b"Xeria-Launcher/1.0")
+        req.setAttribute(
+            QNetworkRequest.Attribute.RedirectPolicyAttribute,
+            QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy)
+        req.setRawHeader(b"User-Agent", b"Xeria-Launcher/2.504")
         reply = self.nam.get(req)
         reply.finished.connect(
             lambda r=reply, pid=project_id: self._on_meta(r, pid))
 
     def _on_meta(self, reply, pid):
-        status = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
+        status = reply.attribute(
+            QNetworkRequest.Attribute.HttpStatusCodeAttribute)
         err = reply.error()
         data = reply.readAll()
         reply.deleteLater()
-        if err != QNetworkReply.NoError or status != 200:
+        if err != QNetworkReply.NetworkError.NoError or status != 200:
             return
         try:
             info = json.loads(bytes(data).decode("utf-8"))
@@ -382,18 +403,21 @@ class GalleryLoader(QObject):
                 break
         for i, url in enumerate(urls):
             req = QNetworkRequest(QUrl(url))
-            req.setAttribute(QNetworkRequest.FollowRedirectsAttribute, True)
-            req.setRawHeader(b"User-Agent", b"Xeria-Launcher/1.0")
+            req.setAttribute(
+                QNetworkRequest.Attribute.RedirectPolicyAttribute,
+                QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy)
+            req.setRawHeader(b"User-Agent", b"Xeria-Launcher/2.504")
             rep = self.nam.get(req)
             rep.finished.connect(
                 lambda r=rep, p=pid, idx=i: self._on_image(r, p, idx))
 
     def _on_image(self, reply, pid, idx):
-        status = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
+        status = reply.attribute(
+            QNetworkRequest.Attribute.HttpStatusCodeAttribute)
         err = reply.error()
         data = reply.readAll()
         reply.deleteLater()
-        if err != QNetworkReply.NoError or status != 200:
+        if err != QNetworkReply.NetworkError.NoError or status != 200:
             self.shot_ready.emit(pid, idx, None)
             return
         self._pool.start(_ShotDecode(self, pid, idx, data))

@@ -2,14 +2,18 @@ import os, sys, json, hashlib, zipfile, subprocess, platform, threading, time, s
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QMessageBox
-import requests
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QMessageBox
 
 from core.paths import MC_ROOT, IS_WIN, NO_WINDOW
+from core import hardware
 from core.java import best_java
 from core.jvm import build_jvm_flags
 from instances.env import build_launch_env
+from integration import http
+
+
+HW = hardware.get()
 
 
 class LaunchMixin:
@@ -68,8 +72,7 @@ class LaunchMixin:
         if not self.current_profile:
             QMessageBox.information(self, "No instance",
                                     "Select an instance first.")
-            return
-        if not self.manifest:
+            return        if not self.manifest:
             QMessageBox.warning(self, "Wait", "Manifest not loaded.")
             return
         p = self.current_profile
@@ -77,12 +80,14 @@ class LaunchMixin:
         self.console.log("info", f"launch '{p.name}' ({p.version})")
         from core.worker import Worker
         w = Worker(self._do_launch, p)
-        w.log.connect(self.console.log, Qt.QueuedConnection)
-        w.progress.connect(lambda *a: self.console.log("progress", a),
-                           Qt.QueuedConnection)
-        w.progress_end.connect(lambda: self.console.log("progress_end", None),
-                               Qt.QueuedConnection)
-        w.done.connect(self._launch_done, Qt.QueuedConnection)
+        w.log.connect(self.console.log, Qt.ConnectionType.QueuedConnection)
+        w.progress.connect(
+            lambda *a: self.console.log("progress", a),
+            Qt.ConnectionType.QueuedConnection)
+        w.progress_end.connect(
+            lambda: self.console.log("progress_end", None),
+            Qt.ConnectionType.QueuedConnection)
+        w.done.connect(self._launch_done, Qt.ConnectionType.QueuedConnection)
         self._track(w); w.start()
 
     def _launch_done(self, proc):
@@ -205,6 +210,7 @@ class LaunchMixin:
         if needed:
             log("sys", f"{len(needed)} libraries missing — downloading")
             done_count = [0]; lock = threading.Lock()
+            workers = HW.library_workers
 
             def fetch(item):
                 url, path = item
@@ -214,7 +220,7 @@ class LaunchMixin:
                     progress("libraries", done_count[0], len(needed), "", "")
                 return ok, path
 
-            with ThreadPoolExecutor(max_workers=8) as ex:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
                 futures = [ex.submit(fetch, it) for it in needed]
                 for f in as_completed(futures):
                     ok, path = f.result()
@@ -259,7 +265,7 @@ class LaunchMixin:
             except Exception as e: log("error", f"invalid wrapper: {e}")
 
         env = build_launch_env(profile, self.settings)
-        log("sys", f"spawning java -Xmx{profile.ram}G ...")
+        log("sys", f"spawning java -Xmx{profile.ram}G")
         try:
             proc = subprocess.Popen(cmd, cwd=str(profile.dir),
                                     stdout=subprocess.PIPE,
@@ -285,7 +291,8 @@ class LaunchMixin:
         idx_path = assets_root / "indexes" / f"{idx['id']}.json"
         if not idx_path.exists():
             idx_path.parent.mkdir(parents=True, exist_ok=True)
-            r = requests.get(idx["url"], timeout=30); r.raise_for_status()
+            r = http.get(idx["url"])
+            r.raise_for_status()
             idx_path.write_bytes(r.content)
         try:
             index = json.loads(idx_path.read_text())
@@ -300,18 +307,18 @@ class LaunchMixin:
         if not to_get: return
         log("sys", f"{len(to_get)} assets missing — downloading")
         lock = threading.Lock(); done = [0]
-        session = requests.Session()
+        workers = HW.asset_workers
 
         def fetch(item):
             h, dest = item
             url = f"https://resources.download.minecraft.net/{h[:2]}/{h}"
             try:
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                with session.get(url, stream=True, timeout=30) as r:
+                with http.stream("GET", url) as r:
                     r.raise_for_status()
                     tmp = dest.with_suffix(".part")
                     with open(tmp, "wb") as f:
-                        for chunk in r.iter_content(65536):
+                        for chunk in r.iter_bytes(65536):
                             f.write(chunk)
                     tmp.replace(dest)
                 ok = True
@@ -324,7 +331,7 @@ class LaunchMixin:
             return ok
 
         ok_count = 0
-        with ThreadPoolExecutor(max_workers=16) as ex:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
             for ok in ex.map(fetch, to_get):
                 if ok: ok_count += 1
         progress_end()
@@ -368,13 +375,13 @@ class LaunchMixin:
         if dest.exists() and dest.stat().st_size > 0: return
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with requests.get(url, stream=True, timeout=60) as r:
+            with http.stream("GET", url) as r:
                 r.raise_for_status()
                 total = int(r.headers.get("content-length", 0))
                 done = 0; b0 = 0; tl = time.time()
                 tmp = dest.with_suffix(dest.suffix + ".part")
                 with open(tmp, "wb") as f:
-                    for chunk in r.iter_content(65536):
+                    for chunk in r.iter_bytes(65536):
                         f.write(chunk); done += len(chunk)
                         now = time.time()
                         if now - tl >= 0.15 or done == total:
@@ -392,11 +399,11 @@ class LaunchMixin:
         if dest.exists() and dest.stat().st_size > 0: return True
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with requests.get(url, stream=True, timeout=60) as r:
+            with http.stream("GET", url) as r:
                 r.raise_for_status()
                 tmp = dest.with_suffix(dest.suffix + ".part")
                 with open(tmp, "wb") as f:
-                    for chunk in r.iter_content(65536):
+                    for chunk in r.iter_bytes(65536):
                         f.write(chunk)
                 tmp.replace(dest)
             return True
@@ -413,7 +420,7 @@ class LaunchMixin:
         try:
             for v in self.manifest["versions"]:
                 if v["id"] == vid:
-                    return requests.get(v["url"], timeout=20).json()
+                    return http.get(v["url"]).json()
         except Exception:
             pass
         path = MC_ROOT / "versions" / vid / f"{vid}.json"
@@ -445,12 +452,11 @@ class LaunchMixin:
                 art = cl[k]; p = MC_ROOT / "libraries" / art["path"]
                 if p.exists(): return p
                 try:
-                    with requests.get(art["url"], stream=True,
-                                      timeout=60) as r:
+                    with http.stream("GET", art["url"]) as r:
                         r.raise_for_status()
                         p.parent.mkdir(parents=True, exist_ok=True)
                         with open(p, "wb") as f:
-                            for ch in r.iter_content(16384):
+                            for ch in r.iter_bytes(16384):
                                 f.write(ch)
                     return p
                 except Exception:

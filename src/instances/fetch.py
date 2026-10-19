@@ -1,11 +1,9 @@
 import time
-from PyQt5.QtCore import Qt
-import requests
+from PyQt6.QtCore import Qt
 
 from core.paths import MANIFEST_URL
 from core.worker import Worker
-from core.settings import detect_gpu
-from ui.helpers import mc_icon_sync
+from integration import http
 
 
 class FetchMixin:
@@ -13,7 +11,7 @@ class FetchMixin:
         def task(log, progress, progress_end):
             log("net", f"GET {MANIFEST_URL}")
             t0 = time.time()
-            r = requests.get(MANIFEST_URL, timeout=8)
+            r = http.get(MANIFEST_URL)
             r.raise_for_status()
             d = r.json()
             rel = [v for v in d["versions"] if v["type"] == "release"]
@@ -22,8 +20,9 @@ class FetchMixin:
             return d, rel
 
         w = Worker(task)
-        w.log.connect(self.console.log, Qt.QueuedConnection)
-        w.done.connect(self._manifest_done, Qt.QueuedConnection)
+        w.log.connect(self.console.log, Qt.ConnectionType.QueuedConnection)
+        w.done.connect(self._manifest_done,
+                       Qt.ConnectionType.QueuedConnection)
         self._track(w)
         w.start()
 

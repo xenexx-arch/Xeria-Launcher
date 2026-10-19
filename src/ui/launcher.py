@@ -1,28 +1,24 @@
-import os, sys, json, hashlib, zipfile, subprocess, platform, threading, time, tempfile, shlex, shutil
+import os, sys, json, subprocess, platform
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import requests
-from PyQt5.QtCore import (
-    Qt, QTimer, pyqtSignal, QSize, QPropertyAnimation, QEasingCurve, QUrl, QRect,
+
+from PyQt6.QtCore import (
+    Qt, QTimer, pyqtSignal, QSize, QPropertyAnimation, QEasingCurve, QRect,
 )
-from PyQt5.QtGui import QFont, QGuiApplication, QColor, QPalette, QIcon
-from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest
-from PyQt5.QtWidgets import (
+from PyQt6.QtGui import QFont, QColor, QPalette, QIcon, QAction
+from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QUrl
+from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QPushButton, QListWidget, QListWidgetItem, QMenu, QAction,
-    QMessageBox, QDialog, QFileDialog, QApplication,
-    QLineEdit, QSplitter, QStackedWidget, QStyle, QSizePolicy,
+    QPushButton, QListWidget, QListWidgetItem, QMenu,
+    QMessageBox, QApplication,
+    QSplitter, QStackedWidget, QStyle, QSizePolicy,
     QStyledItemDelegate, QStyleOptionViewItem,
 )
+
 from core import theme
-from core.paths import (MC_ROOT, PROFILES_DIR, MANIFEST_URL,
-                        IS_WIN, IS_MAC, XERIA_ROOT)
-from core.java import best_java, recommended_java_for, find_javas
+from core import hardware
+from core.paths import MC_ROOT, PROFILES_DIR, IS_WIN
 from core.settings import Settings, detect_gpu
 from core.worker import Worker, _shutdown, _leaked_threads
-from core.jvm import default_jvm_flags, build_jvm_flags
-from instances.profile import Profile
-from instances.env import build_launch_env
 from instances.profiles import ProfilesMixin
 from instances.launch import LaunchMixin
 from instances.fetch import FetchMixin
@@ -44,6 +40,7 @@ from ui.account import AccountView
 from browse.mods import ModsDialog
 from browse.resourcepacks import ResourcePacksDialog
 from browse.shaderpacks import ShadersDialog
+from integration import http
 
 
 BROWSE_BY_KIND = {
@@ -55,7 +52,7 @@ BROWSE_BY_KIND = {
 
 class _NoTintDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
-        icon = index.data(Qt.DecorationRole)
+        icon = index.data(Qt.ItemDataRole.DecorationRole)
         if icon is None or icon.isNull():
             super().paint(painter, option, index)
             return
@@ -66,7 +63,8 @@ class _NoTintDelegate(QStyledItemDelegate):
 
         widget = opt.widget
         style = widget.style() if widget else QApplication.style()
-        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, widget)
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt,
+                          painter, widget)
 
         size = opt.decorationSize
         if size.isValid() and not size.isEmpty():
@@ -75,13 +73,23 @@ class _NoTintDelegate(QStyledItemDelegate):
             x = opt.rect.left() + 8
             y = opt.rect.top() + (opt.rect.height() - icon_h) // 2
             rect = QRect(x, y, icon_w, icon_h)
-            icon.paint(painter, rect, Qt.AlignCenter, QIcon.Normal)
+            icon.paint(painter, rect, Qt.AlignmentFlag.AlignCenter,
+                       QIcon.Mode.Normal)
 
 
 def slide_widget_h(widget, visible, duration=180):
     if visible and widget.isVisible() and widget.maximumWidth() > 100:
         return
     if not visible and (not widget.isVisible() or widget.maximumWidth() < 100):
+        return
+    hw = hardware.get()
+    if hw.tier == "potato":
+        if visible:
+            widget.setVisible(True)
+            widget.setMaximumWidth(340)
+        else:
+            widget.setVisible(False)
+            widget.setMaximumWidth(16777215)
         return
     if visible:
         widget.setVisible(True)
@@ -94,7 +102,7 @@ def slide_widget_h(widget, visible, duration=180):
     a.setDuration(duration)
     a.setStartValue(start)
     a.setEndValue(end)
-    a.setEasingCurve(QEasingCurve.OutCubic)
+    a.setEasingCurve(QEasingCurve.Type.OutCubic)
     if not visible:
         def done():
             widget.setVisible(False)
@@ -129,7 +137,8 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
         self._running_profile = None
         self._launching_profile = None
         self._build_ui()
-        self.mc_log.connect(self._on_mc_log, Qt.QueuedConnection)
+        self.mc_log.connect(self._on_mc_log,
+                            Qt.ConnectionType.QueuedConnection)
         QTimer.singleShot(100, self._startup)
 
     def _on_mc_log(self, line):
@@ -171,7 +180,7 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
         h.addWidget(self.gear_btn)
         root.addLayout(h)
 
-        self.split = QSplitter(Qt.Horizontal)
+        self.split = QSplitter(Qt.Orientation.Horizontal)
         self.split.setChildrenCollapsible(False)
         self.split.setHandleWidth(20)
         self.split.setStyleSheet("QSplitter::handle{background:transparent}")
@@ -206,7 +215,7 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
         self.plist = QListWidget()
         self.plist.setFont(QFont(theme.UI_FONT, 10))
         self.plist.setSpacing(0)
-        self.plist.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.plist.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.plist.setIconSize(QSize(20, 20))
         self.plist.setItemDelegate(_NoTintDelegate(self.plist))
         self.plist.setStyleSheet(
@@ -221,8 +230,8 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
             f"QScrollBar::add-line,QScrollBar::sub-line{{height:0}}"
             f"QScrollBar::add-page,QScrollBar::sub-page{{background:transparent}}")
         pal = self.plist.palette()
-        pal.setColor(QPalette.Highlight, QColor(theme.BG3))
-        pal.setColor(QPalette.HighlightedText, QColor(theme.FG))
+        pal.setColor(QPalette.ColorRole.Highlight, QColor(theme.BG3))
+        pal.setColor(QPalette.ColorRole.HighlightedText, QColor(theme.FG))
         self.plist.setPalette(pal)
         self.plist.currentRowChanged.connect(self._on_row_changed)
         self.plist.customContextMenuRequested.connect(self._ctx_menu)
@@ -230,7 +239,8 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
         self.split.addWidget(self.left)
 
         self.stack = QStackedWidget()
-        self.stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.stack.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                 QSizePolicy.Policy.Expanding)
 
         self.inst_view = QWidget()
         self.inst_view.setStyleSheet(f"QWidget{{background:{theme.BG}}}")
@@ -327,15 +337,16 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
 
         app = QApplication.instance()
         pal = app.palette()
-        pal.setColor(pal.Window, QColor(_theme.BG))
-        pal.setColor(pal.WindowText, QColor(_theme.FG))
-        pal.setColor(pal.Base, QColor(_theme.BG2))
-        pal.setColor(pal.AlternateBase, QColor(_theme.BG3))
-        pal.setColor(pal.Text, QColor(_theme.FG))
-        pal.setColor(pal.Button, QColor(_theme.BG3))
-        pal.setColor(pal.ButtonText, QColor(_theme.FG))
-        pal.setColor(pal.Highlight, QColor(_theme.ACCENT))
-        pal.setColor(pal.HighlightedText, QColor(_theme.on_accent()))
+        pal.setColor(QPalette.ColorRole.Window, QColor(_theme.BG))
+        pal.setColor(QPalette.ColorRole.WindowText, QColor(_theme.FG))
+        pal.setColor(QPalette.ColorRole.Base, QColor(_theme.BG2))
+        pal.setColor(QPalette.ColorRole.AlternateBase, QColor(_theme.BG3))
+        pal.setColor(QPalette.ColorRole.Text, QColor(_theme.FG))
+        pal.setColor(QPalette.ColorRole.Button, QColor(_theme.BG3))
+        pal.setColor(QPalette.ColorRole.ButtonText, QColor(_theme.FG))
+        pal.setColor(QPalette.ColorRole.Highlight, QColor(_theme.ACCENT))
+        pal.setColor(QPalette.ColorRole.HighlightedText,
+                     QColor(_theme.on_accent()))
         app.setPalette(pal)
 
         self.setStyleSheet(
@@ -363,8 +374,8 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
             f"QScrollBar::add-line,QScrollBar::sub-line{{height:0}}"
             f"QScrollBar::add-page,QScrollBar::sub-page{{background:transparent}}")
         pal = self.plist.palette()
-        pal.setColor(QPalette.Highlight, QColor(_theme.BG3))
-        pal.setColor(QPalette.HighlightedText, QColor(_theme.FG))
+        pal.setColor(QPalette.ColorRole.Highlight, QColor(_theme.BG3))
+        pal.setColor(QPalette.ColorRole.HighlightedText, QColor(_theme.FG))
         self.plist.setPalette(pal)
         self.add_btn.setStyleSheet(s_plus_btn())
 
@@ -405,11 +416,14 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
             lambda: self._workers.remove(w) if w in self._workers else None)
 
     def _startup(self):
-        self.load_profiles()
-        self.console.log("sys",
+        hw = hardware.get()
+        self.console.log(
+            "sys",
             f"platform={platform.system()} python={platform.python_version()}")
+        self.console.log("sys", f"hardware {hw.summary()}")
         self.console.log("sys", f"gpu={detect_gpu()}")
         self.console.log("sys", f"mc_root={MC_ROOT}")
+        self.load_profiles()
         self.fetch_manifest()
         self._warm_modrinth()
         fetch_all_loaders(self._apply_loader_icon)
@@ -418,8 +432,10 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
         if not hasattr(self, "_warm_nam"):
             self._warm_nam = QNetworkAccessManager(self)
         req = QNetworkRequest(QUrl("https://api.modrinth.com/"))
-        req.setAttribute(QNetworkRequest.FollowRedirectsAttribute, True)
-        req.setRawHeader(b"User-Agent", b"Xeria-Launcher/1.0")
+        req.setAttribute(
+            QNetworkRequest.Attribute.RedirectPolicyAttribute,
+            QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy)
+        req.setRawHeader(b"User-Agent", b"Xeria-Launcher/2.504")
         self._warm_nam.get(req)
 
     def _apply_loader_icon(self, name, ic):
@@ -435,9 +451,11 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
         self.plist.setCurrentItem(it)
         if not self.current_profile: return
         m = QMenu(self); m.setStyleSheet(s_menu())
-        h = QAction(self.current_profile.name, m); h.setEnabled(False); m.addAction(h)
+        h = QAction(self.current_profile.name, m); h.setEnabled(False)
+        m.addAction(h)
         m.addSeparator()
-        for label, kind in (("Mods", "mod"), ("Resource Packs", "resourcepack"),
+        for label, kind in (("Mods", "mod"),
+                            ("Resource Packs", "resourcepack"),
                             ("Shaders", "shader")):
             a = QAction(label, m)
             a.triggered.connect(lambda _, k=kind: self._open_browse(k))
@@ -451,20 +469,22 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
             a = QAction(label, m); a.triggered.connect(fn); m.addAction(a)
         m.addSeparator()
         for label, fn in (("Import Instance...", self.import_instance),
-                          ("Export as Modrinth pack (.mrpack)", self.export_mrpack),
+                          ("Export as Modrinth pack (.mrpack)",
+                           self.export_mrpack),
                           ("Backup Instance", self.backup_instance),
                           ("Copy Launch Command", self.copy_launch_command),
                           ("Open Logs Folder", self.open_logs)):
             a = QAction(label, m); a.triggered.connect(fn); m.addAction(a)
         m.addSeparator()
-        a = QAction("Delete", m); a.triggered.connect(self.delete_profile); m.addAction(a)
-        m.exec_(self.plist.mapToGlobal(pos))
+        a = QAction("Delete", m); a.triggered.connect(self.delete_profile)
+        m.addAction(a)
+        m.exec(self.plist.mapToGlobal(pos))
 
     def _open_browse(self, kind):
         if not self.current_profile:
             return
         dlg_cls = BROWSE_BY_KIND[kind]
-        dlg_cls(self, self.current_profile, self.console.log).exec_()
+        dlg_cls(self, self.current_profile, self.console.log).exec()
 
     def closeEvent(self, event):
         _shutdown.set()
@@ -472,9 +492,11 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
         if p and p.poll() is None:
             try:
                 if IS_WIN:
-                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)],
-                                   capture_output=True)
-                else: p.terminate()
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(p.pid)],
+                        capture_output=True)
+                else:
+                    p.terminate()
                 p.wait(2000)
             except Exception:
                 try: p.kill()
@@ -490,4 +512,5 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
                     if not w.wait(3000):
                         _leaked_threads.append(w); w.setParent(None)
             except Exception: pass
+        http.close()
         event.accept()

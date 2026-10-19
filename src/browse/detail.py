@@ -1,28 +1,35 @@
 import re
 import json
 
-from PyQt5.QtCore import Qt, QUrl, QPropertyAnimation, QEasingCurve
-from PyQt5.QtGui import (
-    QPixmap, QPainter, QDesktopServices,
-)
-from PyQt5.QtNetwork import QNetworkRequest
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, QUrl, QPropertyAnimation, QEasingCurve
+from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtNetwork import QNetworkRequest
+from PyQt6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget,
     QSizePolicy, QTextBrowser, QScrollArea,
 )
 
 from core import theme
+from core import hardware
 from browse.common import (
     ICON_SIZE_DETAIL, DETAIL_WIDTH, make_placeholder,
     square_icon, square_icon_pixmap, _crop_alpha_bbox,
 )
 
 
+HW = hardware.get()
+
 _BODY_CACHE = {}
 _BODY_PENDING = set()
 
+_BODY_MAX_LEN = 12000 if HW.tier == "potato" else 40000
+
 
 def _md_to_html(md):
+    if not md:
+        return ""
+    if len(md) > _BODY_MAX_LEN:
+        md = md[:_BODY_MAX_LEN] + "\n\n(description truncated)"
     text = md.replace("\r\n", "\n")
 
     def _linked(m):
@@ -61,7 +68,7 @@ class _HScrollArea(QScrollArea):
 
 
 class DetailPanel(QFrame):
-    ANIM_MS = 220
+    ANIM_MS = 140 if HW.tier == "potato" else 220
     SHOTS_HEIGHT = 180
     THUMB_H = 130
 
@@ -91,7 +98,7 @@ class DetailPanel(QFrame):
 
         self.icon_lbl = QLabel()
         self.icon_lbl.setFixedSize(ICON_SIZE_DETAIL, ICON_SIZE_DETAIL)
-        self.icon_lbl.setAlignment(Qt.AlignCenter)
+        self.icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.icon_lbl.setStyleSheet(
             f"background:{theme.BG3};border:1px solid {theme.BORDER}")
 
@@ -102,13 +109,14 @@ class DetailPanel(QFrame):
         ic_col.setContentsMargins(0, 0, 0, 0)
         ic_col.setSpacing(0)
         ic_col.addStretch(1)
-        ic_col.addWidget(self.icon_lbl, 0, Qt.AlignHCenter)
+        ic_col.addWidget(self.icon_lbl, 0, Qt.AlignmentFlag.AlignHCenter)
         ic_col.addStretch(1)
         hh.addWidget(ic_host, 0)
 
         text_host = QWidget()
         text_host.setStyleSheet("background:transparent;border:none")
-        text_host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        text_host.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                QSizePolicy.Policy.Preferred)
         tcol = QVBoxLayout(text_host)
         tcol.setContentsMargins(0, 0, 0, 0)
         tcol.setSpacing(4)
@@ -134,10 +142,13 @@ class DetailPanel(QFrame):
         self.desc_view.setOpenExternalLinks(False)
         self.desc_view.setOpenLinks(False)
         self.desc_view.anchorClicked.connect(self._open_link)
-        self.desc_view.setFrameShape(QFrame.NoFrame)
-        self.desc_view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.desc_view.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.desc_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.desc_view.setFrameShape(QFrame.Shape.NoFrame)
+        self.desc_view.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.desc_view.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.desc_view.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                     QSizePolicy.Policy.Expanding)
         self.desc_view.setStyleSheet(
             f"QTextBrowser{{background:{theme.BG2};color:{theme.FG};"
             f"border:none;padding:14px;"
@@ -170,9 +181,11 @@ class DetailPanel(QFrame):
 
         self.shots_scroll = _HScrollArea()
         self.shots_scroll.setWidgetResizable(True)
-        self.shots_scroll.setFrameShape(QFrame.NoFrame)
-        self.shots_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.shots_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.shots_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.shots_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.shots_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.shots_scroll.setStyleSheet(
             f"QScrollArea{{background:{theme.BG3};border:none}}"
             f"QScrollBar:horizontal{{background:{theme.BG3};height:8px;margin:0}}"
@@ -213,13 +226,18 @@ class DetailPanel(QFrame):
                             on_done=lambda: self.setVisible(False))
 
     def _animate_width(self, start, end, on_done=None):
+        if HW.tier == "potato":
+            self.setMaximumWidth(int(end))
+            if on_done:
+                on_done()
+            return
         if self._anim is not None:
             self._anim.stop()
         a = QPropertyAnimation(self, b"maximumWidth", self)
         a.setDuration(self.ANIM_MS)
         a.setStartValue(int(start))
         a.setEndValue(int(end))
-        a.setEasingCurve(QEasingCurve.OutCubic)
+        a.setEasingCurve(QEasingCurve.Type.OutCubic)
         if on_done:
             a.finished.connect(on_done)
         self._anim = a
@@ -241,7 +259,7 @@ class DetailPanel(QFrame):
                 w.deleteLater()
         self.shots_frame.setVisible(False)
 
-        cached = _BODY_CACHE.get(self.pid)
+        cached = _BODY_CACHE.get(self.pid) if HW.enable_body_cache else None
         if cached is not None:
             self._body_html = cached
         else:
@@ -258,7 +276,7 @@ class DetailPanel(QFrame):
             self._fetch_body(self.pid)
 
     def _fetch_body(self, pid):
-        if pid in _BODY_CACHE:
+        if HW.enable_body_cache and pid in _BODY_CACHE:
             self._body_html = _BODY_CACHE[pid]
             self.desc_view.setHtml(self._body_html)
             return
@@ -270,13 +288,15 @@ class DetailPanel(QFrame):
 
         req = QNetworkRequest(
             QUrl(f"https://api.modrinth.com/v2/project/{pid}"))
-        req.setAttribute(QNetworkRequest.FollowRedirectsAttribute, True)
-        req.setRawHeader(b"User-Agent", b"Xeria-Launcher/1.0")
+        req.setAttribute(
+            QNetworkRequest.Attribute.RedirectPolicyAttribute,
+            QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy)
+        req.setRawHeader(b"User-Agent", b"Xeria-Launcher/2.504")
         reply = self._nam.get(req)
 
         def _done():
             status = reply.attribute(
-                QNetworkRequest.HttpStatusCodeAttribute)
+                QNetworkRequest.Attribute.HttpStatusCodeAttribute)
             data = reply.readAll()
             reply.deleteLater()
             _BODY_PENDING.discard(pid)
@@ -287,7 +307,8 @@ class DetailPanel(QFrame):
             except Exception:
                 return
             html = _md_to_html(body)
-            _BODY_CACHE[pid] = html
+            if HW.enable_body_cache:
+                _BODY_CACHE[pid] = html
             if self.pid == pid:
                 self._body_html = html
                 self.desc_view.setHtml(html)
@@ -318,7 +339,9 @@ class DetailPanel(QFrame):
         tw = int(pm.width() * th / max(1, pm.height()))
         if tw < 60:
             tw = 60
-        scaled = pm.scaled(tw, th, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        scaled = pm.scaled(tw, th,
+                           Qt.AspectRatioMode.KeepAspectRatio,
+                           Qt.TransformationMode.SmoothTransformation)
 
         lbl = QLabel()
         lbl.setFixedSize(scaled.width(), scaled.height())

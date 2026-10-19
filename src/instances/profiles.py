@@ -1,13 +1,13 @@
 import os, sys, json, zipfile, subprocess, platform, tempfile, shutil
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QSize
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtWidgets import (
     QMessageBox, QDialog, QFileDialog, QInputDialog, QListWidgetItem,
 )
 from core import theme
 from core.paths import (PROFILES_DIR, MANIFEST_URL,
-                        IS_WIN, IS_MAC, NO_WINDOW, XERIA_ROOT)
+                        IS_WIN, IS_MAC, NO_WINDOW, XERIA_ROOT, MC_ROOT)
 from core.java import best_java, recommended_java_for
 from core.worker import Worker
 from instances.profile import Profile
@@ -15,7 +15,7 @@ from ui.dialogs import (ChooseInstallDialog, ModpackSearchDialog,
                         ProfileDialog)
 from ui.helpers import s_menu
 from ui.loader_icons import loader_icon_sync, fetch_loader_icon
-import requests
+from integration import http
 
 
 class ProfilesMixin:
@@ -142,7 +142,7 @@ class ProfilesMixin:
 
     def add_new(self):
         ch = ChooseInstallDialog(self)
-        if ch.exec_() != QDialog.Accepted or not ch.choice: return
+        if ch.exec() != QDialog.DialogCode.Accepted or not ch.choice: return
         if ch.choice == "blank": self._add_blank_profile()
         elif ch.choice == "local": self._add_local_modpack()
         elif ch.choice == "modrinth": self._add_modrinth_modpack()
@@ -150,7 +150,7 @@ class ProfilesMixin:
     def _add_blank_profile(self):
         if not self.releases:
             try:
-                d = requests.get(MANIFEST_URL, timeout=8).json()
+                d = http.get(MANIFEST_URL).json()
                 self.manifest = d
                 self.releases = [v for v in d["versions"]
                                  if v["type"] == "release"]
@@ -158,7 +158,7 @@ class ProfilesMixin:
                 QMessageBox.critical(self, "Error",
                                      f"Cannot fetch versions:\n{e}"); return
         dlg = ProfileDialog(self, self.releases, self.settings)
-        if dlg.exec_() != QDialog.Accepted: return
+        if dlg.exec() != QDialog.DialogCode.Accepted: return
         name, ver, ram, loader = dlg.values()
         if not name:
             QMessageBox.warning(self, "Error", "Name required."); return
@@ -180,12 +180,14 @@ class ProfilesMixin:
             "Modpacks (*.xerpack *.zip *.mrpack);;All files (*)")
         if not path: return
         w = Worker(self._install_local_modpack_task, path)
-        w.log.connect(self.console.log, Qt.QueuedConnection)
-        w.progress.connect(lambda *a: self.console.log("progress", a),
-                           Qt.QueuedConnection)
-        w.progress_end.connect(lambda: self.console.log("progress_end", None),
-                               Qt.QueuedConnection)
-        w.done.connect(self._modpack_done, Qt.QueuedConnection)
+        w.log.connect(self.console.log, Qt.ConnectionType.QueuedConnection)
+        w.progress.connect(
+            lambda *a: self.console.log("progress", a),
+            Qt.ConnectionType.QueuedConnection)
+        w.progress_end.connect(
+            lambda: self.console.log("progress_end", None),
+            Qt.ConnectionType.QueuedConnection)
+        w.done.connect(self._modpack_done, Qt.ConnectionType.QueuedConnection)
         self._track(w); w.start()
 
     def _install_local_modpack_task(self, path, log, progress, progress_end):
@@ -195,15 +197,17 @@ class ProfilesMixin:
 
     def _add_modrinth_modpack(self):
         dlg = ModpackSearchDialog(self, self.console.log)
-        if dlg.exec_() != QDialog.Accepted or not dlg.result: return
+        if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.result: return
         hit = dlg.result
         w = Worker(self._download_and_install_modpack, hit)
-        w.log.connect(self.console.log, Qt.QueuedConnection)
-        w.progress.connect(lambda *a: self.console.log("progress", a),
-                           Qt.QueuedConnection)
-        w.progress_end.connect(lambda: self.console.log("progress_end", None),
-                               Qt.QueuedConnection)
-        w.done.connect(self._modpack_done, Qt.QueuedConnection)
+        w.log.connect(self.console.log, Qt.ConnectionType.QueuedConnection)
+        w.progress.connect(
+            lambda *a: self.console.log("progress", a),
+            Qt.ConnectionType.QueuedConnection)
+        w.progress_end.connect(
+            lambda: self.console.log("progress_end", None),
+            Qt.ConnectionType.QueuedConnection)
+        w.done.connect(self._modpack_done, Qt.ConnectionType.QueuedConnection)
         self._track(w); w.start()
 
     def _download_and_install_modpack(self, hit, log, progress, progress_end):
@@ -215,11 +219,11 @@ class ProfilesMixin:
         log("ok", f"version {ver}: {filename}")
         tmp = Path(tempfile.gettempdir()) / filename
         try:
-            with requests.get(url, stream=True, timeout=180) as r:
+            with http.stream("GET", url) as r:
                 r.raise_for_status()
                 total = int(r.headers.get("content-length", 0)); done = 0
                 with open(tmp, "wb") as f:
-                    for chunk in r.iter_content(65536):
+                    for chunk in r.iter_bytes(65536):
                         f.write(chunk); done += len(chunk)
                         if total and progress:
                             progress(filename, done, total, "", "")
@@ -243,7 +247,7 @@ class ProfilesMixin:
         if not self.current_profile: return
         p = self.current_profile
         dlg = ProfileDialog(self, self.releases, self.settings, profile=p)
-        if dlg.exec_() != QDialog.Accepted: return
+        if dlg.exec() != QDialog.DialogCode.Accepted: return
         name, ver, ram, loader = dlg.values()
         if not name:
             QMessageBox.warning(self, "Error", "Name required."); return
@@ -303,10 +307,11 @@ class ProfilesMixin:
 
     def delete_profile(self):
         if not self.current_profile: return
-        if QMessageBox.question(self, "Delete",
+        if QMessageBox.question(
+            self, "Delete",
             f"Delete '{self.current_profile.name}'?\n"
             f"Mods and worlds removed too."
-        ) != QMessageBox.Yes: return
+        ) != QMessageBox.StandardButton.Yes: return
         n = self.current_profile.name
         Profile.delete(n)
         self.console.log("warn", f"deleted '{n}'")
@@ -333,11 +338,13 @@ class ProfilesMixin:
         if not path: return
         self.console.log("info", f"exporting '{p.name}' as .mrpack")
         w = Worker(self._export_task, p, path)
-        w.log.connect(self.console.log, Qt.QueuedConnection)
-        w.progress.connect(lambda *a: self.console.log("progress", a),
-                           Qt.QueuedConnection)
-        w.progress_end.connect(lambda: self.console.log("progress_end", None),
-                               Qt.QueuedConnection)
+        w.log.connect(self.console.log, Qt.ConnectionType.QueuedConnection)
+        w.progress.connect(
+            lambda *a: self.console.log("progress", a),
+            Qt.ConnectionType.QueuedConnection)
+        w.progress_end.connect(
+            lambda: self.console.log("progress_end", None),
+            Qt.ConnectionType.QueuedConnection)
         self._track(w); w.start()
 
     def _export_task(self, profile, path, log, progress, progress_end):
@@ -353,13 +360,15 @@ class ProfilesMixin:
         if not path: return
         if path.lower().endswith(".mrpack"):
             w = Worker(self._install_local_modpack_task, path)
-            w.log.connect(self.console.log, Qt.QueuedConnection)
-            w.progress.connect(lambda *a: self.console.log("progress", a),
-                               Qt.QueuedConnection)
+            w.log.connect(self.console.log, Qt.ConnectionType.QueuedConnection)
+            w.progress.connect(
+                lambda *a: self.console.log("progress", a),
+                Qt.ConnectionType.QueuedConnection)
             w.progress_end.connect(
                 lambda: self.console.log("progress_end", None),
-                Qt.QueuedConnection)
-            w.done.connect(self._modpack_done, Qt.QueuedConnection)
+                Qt.ConnectionType.QueuedConnection)
+            w.done.connect(self._modpack_done,
+                           Qt.ConnectionType.QueuedConnection)
             self._track(w); w.start()
             return
         self.console.log("info", f"importing {Path(path).name}")
@@ -395,12 +404,15 @@ class ProfilesMixin:
                 return name
 
         w = Worker(task)
-        w.log.connect(self.console.log, Qt.QueuedConnection)
-        w.progress.connect(lambda *a: self.console.log("progress", a),
-                           Qt.QueuedConnection)
-        w.progress_end.connect(lambda: self.console.log("progress_end", None),
-                               Qt.QueuedConnection)
-        w.done.connect(lambda _: self.load_profiles(), Qt.QueuedConnection)
+        w.log.connect(self.console.log, Qt.ConnectionType.QueuedConnection)
+        w.progress.connect(
+            lambda *a: self.console.log("progress", a),
+            Qt.ConnectionType.QueuedConnection)
+        w.progress_end.connect(
+            lambda: self.console.log("progress_end", None),
+            Qt.ConnectionType.QueuedConnection)
+        w.done.connect(lambda _: self.load_profiles(),
+                       Qt.ConnectionType.QueuedConnection)
         self._track(w); w.start()
 
     def backup_instance(self):
@@ -433,11 +445,13 @@ class ProfilesMixin:
             log("ok", f"backup saved ({dest.stat().st_size // 1024} KB)")
 
         w = Worker(task)
-        w.log.connect(self.console.log, Qt.QueuedConnection)
-        w.progress.connect(lambda *a: self.console.log("progress", a),
-                           Qt.QueuedConnection)
-        w.progress_end.connect(lambda: self.console.log("progress_end", None),
-                               Qt.QueuedConnection)
+        w.log.connect(self.console.log, Qt.ConnectionType.QueuedConnection)
+        w.progress.connect(
+            lambda *a: self.console.log("progress", a),
+            Qt.ConnectionType.QueuedConnection)
+        w.progress_end.connect(
+            lambda: self.console.log("progress_end", None),
+            Qt.ConnectionType.QueuedConnection)
         self._track(w); w.start()
 
     def copy_launch_command(self):
@@ -472,7 +486,7 @@ class ProfilesMixin:
                        self.settings.get("wrapper_command", "").strip())
             if wrapper: cmd = _sh.split(wrapper) + cmd
             text = " ".join(_sh.quote(c) for c in cmd)
-            from PyQt5.QtGui import QGuiApplication
+            from PyQt6.QtGui import QGuiApplication
             QGuiApplication.clipboard().setText(text)
             self.console.log("ok", "launch command copied to clipboard")
         except Exception as e:

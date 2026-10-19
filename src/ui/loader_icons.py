@@ -1,9 +1,11 @@
 import hashlib
 from pathlib import Path
 
-from PyQt5.QtCore import QUrl, QSize, Qt
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
-from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
+from PyQt6.QtCore import QUrl, QSize, Qt
+from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor
+from PyQt6.QtNetwork import (
+    QNetworkAccessManager, QNetworkRequest, QNetworkReply,
+)
 
 from core import paths
 from core import theme
@@ -40,8 +42,8 @@ def _cache_path(name):
 
 def _scale(pm):
     return pm.scaled(ICON_SIZE, ICON_SIZE,
-                     aspectRatioMode=Qt.KeepAspectRatio,
-                     transformMode=Qt.SmoothTransformation)
+                     Qt.AspectRatioMode.KeepAspectRatio,
+                     Qt.TransformationMode.SmoothTransformation)
 
 
 def _placeholder():
@@ -49,14 +51,14 @@ def _placeholder():
     pm.fill(QColor(theme.BG3))
     p = QPainter(pm)
     p.setPen(QColor(theme.GRAY))
-    p.drawText(pm.rect(), Qt.AlignCenter, "?")
+    p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, "?")
     p.end()
     return QIcon(pm)
 
 
 def _render_svg(data):
     try:
-        from PyQt5.QtSvg import QSvgRenderer
+        from PyQt6.QtSvg import QSvgRenderer
     except Exception:
         return None
     try:
@@ -128,15 +130,17 @@ def fetch_loader_icon(name, callback):
         _nam = QNetworkAccessManager()
 
     req = QNetworkRequest(QUrl(url))
-    req.setAttribute(QNetworkRequest.FollowRedirectsAttribute, True)
+    req.setAttribute(
+        QNetworkRequest.Attribute.RedirectPolicyAttribute,
+        QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy)
     req.setRawHeader(b"User-Agent",
-                     b"Mozilla/5.0 (X11; Linux x86_64) Xeria/1.0")
+                     b"Mozilla/5.0 (X11; Linux x86_64) Xeria/2.504")
     req.setRawHeader(b"Accept", b"image/*,*/*;q=0.8")
     reply = _nam.get(req)
     cp = _cache_path(name)
 
     def done(r=reply, nm=name, path=cp, src=url):
-        if r.error() != QNetworkReply.NoError:
+        if r.error() != QNetworkReply.NetworkError.NoError:
             r.deleteLater()
             callback(_placeholder())
             return

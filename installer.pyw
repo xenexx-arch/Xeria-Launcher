@@ -13,9 +13,9 @@ import webbrowser
 import urllib.request
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont, QIcon
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QPlainTextEdit, QProgressBar, QMessageBox, QDialog, QLineEdit,
 )
@@ -79,44 +79,43 @@ else:
     DESKTOP_DIR = HOME / ".local" / "share" / "applications"
 
 PIP_REQUIREMENTS = [
-    "PyQt5",
-    "PyQtWebEngine",
-    "PyQt5-sip",
+    "PyQt6",
+    "PyQt6-WebEngine",
     "PyOpenGL",
-    "requests",
-    "Pillow",
+    "httpx[http2]",
+    "pillow",
     "truststore",
 ]
 
 PIP_REQUIREMENTS_LINUX = [
-    "requests",
-    "Pillow",
+    "httpx[http2]",
+    "pillow",
     "truststore",
 ]
 
 LINUX_SYS_PACKAGES = {
     "apt": ["python3", "python3-venv", "python3-pip",
-            "python3-pyqt5", "python3-pyqt5.qtwebengine",
-            "python3-pyqt5.qtsvg", "python3-pyqt5.qtwayland",
+            "python3-pyqt6", "python3-pyqt6.qtwebengine",
+            "python3-pyqt6.qtsvg", "python3-pyqt6.qtwayland",
             "python3-opengl",
             "libgl1-mesa-dri", "mesa-vulkan-drivers", "mesa-opencl-icd",
             "libglx-mesa0", "libopencl1"],
-    "dnf": ["python3", "python3-pip", "python3-qt5",
-            "python3-qt5-webengine", "python3-qt5-svg", "qt5-qtwayland",
+    "dnf": ["python3", "python3-pip", "python3-qt6",
+            "python3-qt6-webengine", "python3-qt6-svg", "qt6-qtwayland",
             "python3-pyopengl",
             "mesa-dri-drivers", "mesa-vulkan-drivers",
             "mesa-libOpenCL", "ocl-icd"],
     "pacman": ["python", "python-pip",
-               "python-pyqt5", "python-pyqt5-webengine", "python-pyqt5-svg",
-               "qt5-wayland", "python-opengl",
+               "python-pyqt6", "python-pyqt6-webengine", "python-pyqt6-svg",
+               "qt6-wayland", "python-opengl",
                "mesa", "vulkan-icd-loader", "ocl-icd"],
-    "zypper": ["python3", "python3-pip", "python3-qt5",
-               "python3-qt5-webengine", "libqt5-qtsvg",
-               "libqt5-qtwayland", "python3-opengl",
+    "zypper": ["python3", "python3-pip", "python3-qt6",
+               "python3-qt6-webengine", "libQt6Svg",
+               "libqt6-qtwayland", "python3-opengl",
                "Mesa", "Mesa-libGL1",
                "libvulkan1", "libOpenCL1", "ocl-icd"],
-    "apk": ["python3", "py3-pip", "py3-pyqt5",
-            "py3-pyqt5-webengine", "py3-pyqt5-svg", "qt5-qtwayland",
+    "apk": ["python3", "py3-pip", "py3-pyqt6",
+            "py3-pyqt6-webengine", "py3-pyqt6-svg", "qt6-qtwayland",
             "py3-opengl",
             "mesa-dri-gallium", "vulkan-loader", "opencl-icd-loader"],
 }
@@ -148,14 +147,16 @@ CREATE_NO_WINDOW = 0x08000000 if IS_WIN else 0
 
 def _detect_opengl():
     try:
-        from PyQt5.QtGui import QOpenGLContext, QOffscreenSurface, QSurfaceFormat
+        from PyQt6.QtGui import (
+            QOpenGLContext, QOffscreenSurface, QSurfaceFormat,
+        )
     except Exception as e:
         return None, None, f"PyQt GL imports failed: {e}", None
 
     try:
         ctx = QOpenGLContext()
         fmt = QSurfaceFormat()
-        fmt.setRenderableType(QSurfaceFormat.OpenGL)
+        fmt.setRenderableType(QSurfaceFormat.RenderableType.OpenGL)
         ctx.setFormat(fmt)
         if not ctx.create():
             return None, None, "failed to create GL context", None
@@ -256,30 +257,9 @@ def _force_rmtree(path):
             f"sitting inside it and retry")
 
 
-def _ensure_openssl_dlls(app_dir):
-    if not IS_WIN:
-        return
-    try:
-        import PyQt5
-        qt_bin = Path(PyQt5.__file__).parent / "Qt5" / "bin"
-    except Exception:
-        return
-    if not qt_bin.exists():
-        return
-    for dll in ("libssl-1_1-x64.dll", "libcrypto-1_1-x64.dll",
-                "libssl-1_1.dll", "libcrypto-1_1.dll"):
-        src = qt_bin / dll
-        if src.exists():
-            dst = Path(app_dir) / dll
-            if not dst.exists() or dst.stat().st_size != src.stat().st_size:
-                try:
-                    shutil.copy2(src, dst)
-                except Exception:
-                    pass
-
-
 class PasswordDialog(QDialog):
-    def __init__(self, parent=None, prompt="Administrator password required."):
+    def __init__(self, parent=None,
+                 prompt="Administrator password required."):
         super().__init__(parent)
         self.setWindowTitle("Authentication required")
         self.setModal(True)
@@ -303,7 +283,7 @@ class PasswordDialog(QDialog):
         v.addWidget(lbl)
 
         self.field = QLineEdit()
-        self.field.setEchoMode(QLineEdit.Password)
+        self.field.setEchoMode(QLineEdit.EchoMode.Password)
         self.field.setPlaceholderText("password")
         v.addWidget(self.field)
 
@@ -365,7 +345,8 @@ class InstallWorker(QThread):
 
     def _run_install(self):
         self._L("sys", f"platform {platform.system()} {platform.release()}")
-        self._L("sys", f"python {platform.python_version()} (running this installer)")
+        self._L("sys",
+                f"python {platform.python_version()} (running this installer)")
         self._L("sys", f"ssl backend {_SSL_MODE}")
         self._L("sys", f"install dir {INSTALL_DIR}")
 
@@ -376,7 +357,8 @@ class InstallWorker(QThread):
         self.progress.emit(5)
         py = self._find_python()
         if py is None:
-            self._L("py", f"no usable Python >= {MIN_PYTHON[0]}.{MIN_PYTHON[1]} found")
+            self._L("py",
+                    f"no usable Python >= {MIN_PYTHON[0]}.{MIN_PYTHON[1]} found")
             py = self._install_new_python()
             if py is None:
                 return False, "Python still not available"
@@ -411,9 +393,6 @@ class InstallWorker(QThread):
 
         if self._cancelled:
             return False, "cancelled"
-
-        if IS_WIN:
-            self._fix_windows_tls()
 
         self.progress.emit(90)
         self._check_gpu_stack()
@@ -488,7 +467,7 @@ class InstallWorker(QThread):
 
     def _http_get(self, url, timeout=30):
         req = urllib.request.Request(
-            url, headers={"User-Agent": "Xeria Launcher/1.0"})
+            url, headers={"User-Agent": "Xeria Launcher/2.504"})
         if _SSL_CONTEXT is not None:
             return urllib.request.urlopen(req, context=_SSL_CONTEXT,
                                           timeout=timeout)
@@ -607,8 +586,10 @@ class InstallWorker(QThread):
             self._L("warn", "no stable 3.x release found in API response")
             return None
 
-        self._L("ok",
-                f"latest stable: Python {best_key[0]}.{best_key[1]}.{best_key[2]}")
+        self._L(
+            "ok",
+            f"latest stable: Python "
+            f"{best_key[0]}.{best_key[1]}.{best_key[2]}")
         return best_key
 
     def _python_installer_url(self, ver):
@@ -689,7 +670,8 @@ class InstallWorker(QThread):
                                 "PrependPath=1",
                                 "Include_test=0",
                                 "Include_launcher=1"],
-                               check=True, creationflags=CREATE_NO_WINDOW)
+                               check=True,
+                               creationflags=CREATE_NO_WINDOW)
             except subprocess.CalledProcessError as e:
                 self._L("err", f"python installer failed: {e}")
                 return None
@@ -787,7 +769,8 @@ class InstallWorker(QThread):
             raise RuntimeError(
                 "repository layout unexpected — missing: "
                 + ", ".join(str(p.relative_to(INSTALL_DIR)) for p in missing))
-        self._L("ok", "layout verified (core/ui/instances/browse/integration)")
+        self._L("ok",
+                "layout verified (core/ui/instances/browse/integration)")
 
     def _create_venv(self, py):
         if VENV_DIR.exists():
@@ -800,7 +783,7 @@ class InstallWorker(QThread):
         if IS_LINUX:
             kwargs["system_site_packages"] = True
             self._L("venv", "linux: system_site_packages=True "
-                            "(uses distro PyQt5 with working OpenSSL)")
+                            "(uses distro PyQt6 with working OpenSSL)")
         try:
             venv.create(str(VENV_DIR), **kwargs)
         except Exception as e:
@@ -830,7 +813,7 @@ class InstallWorker(QThread):
 
         pkgs = PIP_REQUIREMENTS_LINUX if IS_LINUX else PIP_REQUIREMENTS
         if IS_LINUX:
-            self._L("pip", "linux: skipping PyQt5/PyQtWebEngine/PyOpenGL "
+            self._L("pip", "linux: skipping PyQt6/PyQt6-WebEngine/PyOpenGL "
                            "(using system packages)")
         for i, pkg in enumerate(pkgs, 1):
             self._L("pip", f"install {pkg}")
@@ -931,64 +914,8 @@ class InstallWorker(QThread):
         except subprocess.CalledProcessError as e:
             self._L("warn", f"system package install failed: {e}")
 
-    def _fix_windows_tls(self):
-        if not IS_WIN:
-            return
-        self._L("win", "checking OpenSSL availability for Qt")
-        try:
-            import PyQt5
-            qt_bin = Path(PyQt5.__file__).parent / "Qt5" / "bin"
-        except Exception as e:
-            self._L("warn", f"could not locate PyQt5: {e}")
-            return
-
-        if not qt_bin.exists():
-            self._L("warn", f"Qt5 bin not found at {qt_bin}")
-            return
-
-        copied = []
-        for dll in ("libssl-1_1-x64.dll", "libcrypto-1_1-x64.dll",
-                    "libssl-1_1.dll", "libcrypto-1_1.dll"):
-            src = qt_bin / dll
-            if src.exists():
-                copied.append(dll)
-
-        if copied:
-            self._L("ok",
-                    f"Qt ships OpenSSL DLLs: {', '.join(copied)}")
-            self._L("win",
-                    "PyQt5-Qt5 wheel includes OpenSSL 1.1 — TLS should work")
-        else:
-            self._L("warn",
-                    "Qt5 bin does not contain libssl/libcrypto — TLS may fail")
-            self._L("hint",
-                    "PyQt5 ships its own OpenSSL inside the wheel; if TLS "
-                    "still fails, ensure no conflicting libssl-3.dll is in "
-                    "C:\\Windows\\System32")
-
-        try:
-            probe = subprocess.run(
-                [self._venv_python(), "-c",
-                 "from PyQt5.QtNetwork import QSslSocket;"
-                 "print('ssl_ok' if QSslSocket.supportsSsl() else 'ssl_fail')"],
-                capture_output=True, text=True, timeout=15,
-                creationflags=CREATE_NO_WINDOW)
-            out = (probe.stdout or "").strip()
-            if "ssl_ok" in out:
-                self._L("ok", "QSslSocket.supportsSsl() = True")
-            elif "ssl_fail" in out:
-                self._L("warn", "QSslSocket.supportsSsl() = False")
-                self._L("hint",
-                        "TLS will not work — Modrinth search will fail. "
-                        "Qt needs libssl-1_1-x64.dll and libcrypto-1_1-x64.dll "
-                        "next to the python executable.")
-            else:
-                self._L("warn", f"ssl probe returned: {out or '(empty)'}")
-        except Exception as e:
-            self._L("warn", f"ssl probe failed: {e}")
-
     def _check_gpu_stack(self):
-        self._L("sys", "probing OpenGL…")
+        self._L("sys", "probing OpenGL")
         try:
             vendor, renderer, version, parsed = _detect_opengl()
         except Exception as e:
@@ -1228,7 +1155,7 @@ class InstallerWindow(QWidget):
 
     def _ask_password(self, prompt):
         dlg = PasswordDialog(self, prompt)
-        if dlg.exec_() == QDialog.Accepted:
+        if dlg.exec() == QDialog.DialogCode.Accepted:
             return dlg.value()
         return None
 
@@ -1240,11 +1167,14 @@ class InstallerWindow(QWidget):
         self.bar.setValue(0)
 
         self._worker = InstallWorker(self._log)
-        self._worker.log_line.connect(self._log, Qt.QueuedConnection)
-        self._worker.progress.connect(self.bar.setValue, Qt.QueuedConnection)
-        self._worker.finished_ok.connect(self._on_done, Qt.QueuedConnection)
+        self._worker.log_line.connect(
+            self._log, Qt.ConnectionType.QueuedConnection)
+        self._worker.progress.connect(
+            self.bar.setValue, Qt.ConnectionType.QueuedConnection)
+        self._worker.finished_ok.connect(
+            self._on_done, Qt.ConnectionType.QueuedConnection)
         self._worker.request_password.connect(
-            self._on_password_request, Qt.QueuedConnection)
+            self._on_password_request, Qt.ConnectionType.QueuedConnection)
         self._worker.start()
 
     def _on_password_request(self, prompt):
@@ -1262,10 +1192,12 @@ class InstallerWindow(QWidget):
             self._log("ok", " Xeria Launcher is installed.")
             self._log("ok", "============================================")
             if IS_WIN:
-                self._log("hint", "launch from Start Menu or Desktop shortcut")
+                self._log("hint",
+                          "launch from Start Menu or Desktop shortcut")
             else:
                 py = VENV_DIR / "bin" / "python"
-                self._log("hint", f'launch: "{py}" "{INSTALL_DIR / APP_EXEC}"')
+                self._log("hint",
+                          f'launch: "{py}" "{INSTALL_DIR / APP_EXEC}"')
                 self._log("hint", "or open it from your application menu")
             self._log("info", "")
             self._log("info", "Feel free to close this window.")
@@ -1274,7 +1206,8 @@ class InstallerWindow(QWidget):
             self.install_btn.setEnabled(False)
             self.close_btn.setStyleSheet(
                 f"QPushButton{{background:{ACCENT};color:#000000;border:none;"
-                f"padding:10px 20px;font-weight:bold;font-family:'{UI_FONT}'}}"
+                f"padding:10px 20px;font-weight:bold;"
+                f"font-family:'{UI_FONT}'}}"
                 f"QPushButton:hover{{background:{ACCENT2}}}")
         else:
             self._log("err", f"installation failed: {msg}")
@@ -1288,8 +1221,10 @@ class InstallerWindow(QWidget):
             if QMessageBox.question(
                     self, "Quit",
                     "Installation is still running. Quit anyway?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No) != QMessageBox.Yes:
+                    QMessageBox.StandardButton.Yes |
+                    QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+            ) != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
             self._worker.cancel()
@@ -1305,12 +1240,9 @@ def main():
     if not ic.isNull():
         app.setWindowIcon(ic)
 
-    if IS_WIN:
-        _ensure_openssl_dlls(Path(sys.executable).parent)
-
     w = InstallerWindow()
     w.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
