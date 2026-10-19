@@ -68,11 +68,13 @@ class LaunchMixin:
     def launch(self):
         if self._process and self._process.poll() is not None:
             self._process = None
-        if self._process: return
+        if self._process:
+            return
         if not self.current_profile:
             QMessageBox.information(self, "No instance",
                                     "Select an instance first.")
-            return        if not self.manifest:
+            return
+        if not self.manifest:
             QMessageBox.warning(self, "Wait", "Manifest not loaded.")
             return
         p = self.current_profile
@@ -88,7 +90,8 @@ class LaunchMixin:
             lambda: self.console.log("progress_end", None),
             Qt.ConnectionType.QueuedConnection)
         w.done.connect(self._launch_done, Qt.ConnectionType.QueuedConnection)
-        self._track(w); w.start()
+        self._track(w)
+        w.start()
 
     def _launch_done(self, proc):
         if proc:
@@ -105,7 +108,8 @@ class LaunchMixin:
         try:
             for line in proc.stdout:
                 line = line.rstrip()
-                if line: self.mc_log.emit(line)
+                if line:
+                    self.mc_log.emit(line)
             proc.wait()
             self.mc_log.emit(f"minecraft exited (code {proc.returncode})")
         except Exception as e:
@@ -117,7 +121,8 @@ class LaunchMixin:
     def stop_instance(self):
         p = self._process
         if not p or p.poll() is not None:
-            self._set_launch_state(False); return
+            self._set_launch_state(False)
+            return
         self.console.log("warn", f"stopping pid {p.pid}")
         try:
             if IS_WIN:
@@ -126,8 +131,10 @@ class LaunchMixin:
                     capture_output=True, creationflags=NO_WINDOW)
             else:
                 p.terminate()
-            try: p.wait(3000)
-            except subprocess.TimeoutExpired: p.kill()
+            try:
+                p.wait(3000)
+            except subprocess.TimeoutExpired:
+                p.kill()
         except Exception as e:
             self.console.log("error", f"stop failed: {e}")
         finally:
@@ -162,12 +169,14 @@ class LaunchMixin:
                          self.settings.get("java_path", ""))
         java = best_java(profile.version, log, override=java_override)
         if not java:
-            log("error", "no java available"); return None
+            log("error", "no java available")
+            return None
 
         log("net", f"fetching version json for {effective_version}")
         vj = self._get_vjson(effective_version)
         if not vj:
-            log("error", "version json failed"); return None
+            log("error", "version json failed")
+            return None
 
         jar_dir = MC_ROOT / "versions" / effective_version
         jar_dir.mkdir(parents=True, exist_ok=True)
@@ -177,7 +186,8 @@ class LaunchMixin:
         vj = self._resolve_inheritance(effective_version, vj, log)
         vanilla_id = vj.get("inheritsFrom") or effective_version
 
-        libs_dir = MC_ROOT / "libraries"; cp = []
+        libs_dir = MC_ROOT / "libraries"
+        cp = []
         vanilla_jar = MC_ROOT / "versions" / vanilla_id / f"{vanilla_id}.jar"
         if not vanilla_jar.exists():
             vvj = self._get_vjson(vanilla_id)
@@ -185,7 +195,8 @@ class LaunchMixin:
                 vanilla_jar.parent.mkdir(parents=True, exist_ok=True)
                 self._dl(vvj["downloads"]["client"]["url"], vanilla_jar,
                          "client.jar", progress, progress_end)
-        if vanilla_jar.exists(): cp.append(str(vanilla_jar))
+        if vanilla_jar.exists():
+            cp.append(str(vanilla_jar))
 
         if vanilla_id != effective_version:
             loader_jar = jar_dir / f"{effective_version}.jar"
@@ -193,7 +204,8 @@ class LaunchMixin:
                 if "downloads" in vj and "client" in vj.get("downloads", {}):
                     self._dl(vj["downloads"]["client"]["url"], loader_jar,
                              "loader.jar", progress, progress_end)
-            if loader_jar.exists(): cp.append(str(loader_jar))
+            if loader_jar.exists():
+                cp.append(str(loader_jar))
 
         native_dirs = []
         libs = [x for x in vj.get("libraries", [])
@@ -201,7 +213,8 @@ class LaunchMixin:
         needed = []
         for lib in libs:
             url, rel = self._resolve_library(lib)
-            if not url or not rel: continue
+            if not url or not rel:
+                continue
             p = libs_dir / rel
             if p.exists() and p.stat().st_size > 0:
                 cp.append(str(p))
@@ -209,7 +222,8 @@ class LaunchMixin:
                 needed.append((url, p))
         if needed:
             log("sys", f"{len(needed)} libraries missing — downloading")
-            done_count = [0]; lock = threading.Lock()
+            done_count = [0]
+            lock = threading.Lock()
             workers = HW.library_workers
 
             def fetch(item):
@@ -224,7 +238,8 @@ class LaunchMixin:
                 futures = [ex.submit(fetch, it) for it in needed]
                 for f in as_completed(futures):
                     ok, path = f.result()
-                    if ok: cp.append(str(path))
+                    if ok:
+                        cp.append(str(path))
             progress_end()
 
         for lib in libs:
@@ -237,10 +252,12 @@ class LaunchMixin:
                     with zipfile.ZipFile(nat) as z:
                         z.extractall(out)
                     native_dirs.append(str(out))
-                except Exception: pass
+                except Exception:
+                    pass
 
         self._download_assets(vj, progress, progress_end, log)
-        assets = MC_ROOT / "assets"; idx = vj.get("assetIndex")
+        assets = MC_ROOT / "assets"
+        idx = vj.get("assetIndex")
 
         sep = ";" if IS_WIN else ":"
         jvm_flags = build_jvm_flags(profile, self.settings,
@@ -261,8 +278,10 @@ class LaunchMixin:
         wrapper = (profile.override_wrapper or
                    self.settings.get("wrapper_command", "").strip())
         if wrapper:
-            try: cmd = shlex.split(wrapper) + cmd
-            except Exception as e: log("error", f"invalid wrapper: {e}")
+            try:
+                cmd = shlex.split(wrapper) + cmd
+            except Exception as e:
+                log("error", f"invalid wrapper: {e}")
 
         env = build_launch_env(profile, self.settings)
         log("sys", f"spawning java -Xmx{profile.ram}G")
@@ -273,20 +292,24 @@ class LaunchMixin:
                                     text=True, bufsize=1,
                                     creationflags=NO_WINDOW, env=env)
         except FileNotFoundError:
-            log("error", f"java not found at {java}"); return None
+            log("error", f"java not found at {java}")
+            return None
         except Exception as e:
-            log("error", f"spawn failed: {e}"); return None
+            log("error", f"spawn failed: {e}")
+            return None
         time.sleep(0.6)
         if proc.poll() is not None:
             out, _ = proc.communicate(timeout=2)
-            for line in (out or "").splitlines()[-40:]: log("error", line)
+            for line in (out or "").splitlines()[-40:]:
+                log("error", line)
             log("error", f"exited immediately ({proc.returncode})")
             return None
         return proc
 
     def _download_assets(self, vjson, progress, progress_end, log):
         idx = vjson.get("assetIndex")
-        if not idx: return
+        if not idx:
+            return
         assets_root = MC_ROOT / "assets"
         idx_path = assets_root / "indexes" / f"{idx['id']}.json"
         if not idx_path.exists():
@@ -297,16 +320,21 @@ class LaunchMixin:
         try:
             index = json.loads(idx_path.read_text())
         except Exception as e:
-            log("error", f"asset index parse failed: {e}"); return
+            log("error", f"asset index parse failed: {e}")
+            return
         objects = index.get("objects", {})
         to_get = []
         for name, meta in objects.items():
-            h = meta["hash"]; sub = h[:2]
+            h = meta["hash"]
+            sub = h[:2]
             dest = assets_root / "objects" / sub / h
-            if not dest.exists(): to_get.append((h, dest))
-        if not to_get: return
+            if not dest.exists():
+                to_get.append((h, dest))
+        if not to_get:
+            return
         log("sys", f"{len(to_get)} assets missing — downloading")
-        lock = threading.Lock(); done = [0]
+        lock = threading.Lock()
+        done = [0]
         workers = HW.asset_workers
 
         def fetch(item):
@@ -333,37 +361,46 @@ class LaunchMixin:
         ok_count = 0
         with ThreadPoolExecutor(max_workers=workers) as ex:
             for ok in ex.map(fetch, to_get):
-                if ok: ok_count += 1
+                if ok:
+                    ok_count += 1
         progress_end()
         log("ok", f"{ok_count}/{len(to_get)} assets downloaded")
 
     def _resolve_inheritance(self, vid, vj, log):
         parent_id = vj.get("inheritsFrom")
-        if not parent_id: return vj
+        if not parent_id:
+            return vj
         log("sys", f"{vid} inherits from {parent_id}")
         parent = self._get_vjson(parent_id)
         if not parent:
-            log("error", f"could not load parent {parent_id}"); return vj
+            log("error", f"could not load parent {parent_id}")
+            return vj
         merged_libs = list(parent.get("libraries", []))
         merged_libs.extend(vj.get("libraries", []))
-        merged = dict(parent); merged.update(vj)
+        merged = dict(parent)
+        merged.update(vj)
         merged["libraries"] = merged_libs
         for k in ("downloads", "assetIndex", "assets", "javaVersion"):
-            if k not in merged and k in parent: merged[k] = parent[k]
+            if k not in merged and k in parent:
+                merged[k] = parent[k]
         return merged
 
     def _resolve_library(self, lib):
         art = lib.get("downloads", {}).get("artifact")
-        if art: return art["url"], art["path"]
+        if art:
+            return art["url"], art["path"]
         name = lib.get("name")
-        if not name: return None, None
+        if not name:
+            return None, None
         parts = name.split(":")
-        if len(parts) < 3: return None, None
+        if len(parts) < 3:
+            return None, None
         group, artifact, version = parts[0], parts[1], parts[2]
         classifier = parts[3] if len(parts) > 3 else None
         group_path = group.replace(".", "/")
         fname = f"{artifact}-{version}"
-        if classifier: fname += f"-{classifier}"
+        if classifier:
+            fname += f"-{classifier}"
         fname += ".jar"
         rel = f"{group_path}/{artifact}/{version}/{fname}"
         base = (lib.get("url") or
@@ -372,31 +409,38 @@ class LaunchMixin:
 
     def _dl(self, url, dest, label, progress, progress_end):
         dest = Path(dest)
-        if dest.exists() and dest.stat().st_size > 0: return
+        if dest.exists() and dest.stat().st_size > 0:
+            return
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
             with http.stream("GET", url) as r:
                 r.raise_for_status()
                 total = int(r.headers.get("content-length", 0))
-                done = 0; b0 = 0; tl = time.time()
+                done = 0
+                b0 = 0
+                tl = time.time()
                 tmp = dest.with_suffix(dest.suffix + ".part")
                 with open(tmp, "wb") as f:
                     for chunk in r.iter_bytes(65536):
-                        f.write(chunk); done += len(chunk)
+                        f.write(chunk)
+                        done += len(chunk)
                         now = time.time()
                         if now - tl >= 0.15 or done == total:
                             spd = (done - b0) / (now - tl) if now > tl else 0
                             progress(label, done, total, "",
                                      self._speed(spd))
-                            tl = now; b0 = done
-                tmp.replace(dest); progress_end()
+                            tl = now
+                            b0 = done
+                tmp.replace(dest)
+                progress_end()
         except Exception as e:
             progress_end()
             self.console.log("error", f"dl failed {dest.name}: {e}")
 
     def _dl_silent(self, url, dest):
         dest = Path(dest)
-        if dest.exists() and dest.stat().st_size > 0: return True
+        if dest.exists() and dest.stat().st_size > 0:
+            return True
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
             with http.stream("GET", url) as r:
@@ -412,8 +456,10 @@ class LaunchMixin:
 
     @staticmethod
     def _speed(bps):
-        if bps > 1024*1024: return f"{bps/1024/1024:.1f} MB/s"
-        if bps > 1024: return f"{bps/1024:.0f} KB/s"
+        if bps > 1024 * 1024:
+            return f"{bps / 1024 / 1024:.1f} MB/s"
+        if bps > 1024:
+            return f"{bps / 1024:.0f} KB/s"
         return f"{bps:.0f} B/s"
 
     def _get_vjson(self, vid):
@@ -425,12 +471,15 @@ class LaunchMixin:
             pass
         path = MC_ROOT / "versions" / vid / f"{vid}.json"
         if path.exists():
-            try: return json.loads(path.read_text())
-            except Exception: return None
+            try:
+                return json.loads(path.read_text())
+            except Exception:
+                return None
         return None
 
     def _rules_ok(self, rules):
-        if not rules: return True
+        if not rules:
+            return True
         o = {"windows": "windows", "darwin": "osx",
              "linux": "linux"}.get(platform.system().lower(), "linux")
         a = False
@@ -442,15 +491,18 @@ class LaunchMixin:
 
     def _native(self, lib):
         cl = lib.get("downloads", {}).get("classifiers", {})
-        if not cl: return None
+        if not cl:
+            return None
         s = platform.system().lower()
         keys = {"windows": ["natives-windows", "natives-windows-64"],
                 "darwin": ["natives-macos", "natives-osx"],
                 "linux": ["natives-linux"]}.get(s, [])
         for k in keys:
             if k in cl:
-                art = cl[k]; p = MC_ROOT / "libraries" / art["path"]
-                if p.exists(): return p
+                art = cl[k]
+                p = MC_ROOT / "libraries" / art["path"]
+                if p.exists():
+                    return p
                 try:
                     with http.stream("GET", art["url"]) as r:
                         r.raise_for_status()
