@@ -1,16 +1,14 @@
-Another newmade Minecraft Launcher!
-Was written fully on Python, designed to just work without any advanced/extended interface and functions.
+Another newbie Minecraft Launcher!
+Was written fully on Python, designed to just work without any advanced/extended interface or functions.
 
 Why exactly Xeria Launcher?
-- the simpliest interface = performance + responsiveness
-- license and accounts at the same time
-- fully automatic Java installations
-- can easily import and export modpacks
-- many supported OSes
+- the simpliest interface
+- fully auto Java installations
+- supports licensed and cracked accounts
+- supports .mrpack and .xeriapack imports and exports
+- supports various OSes
 
-what are you waiting for? feel free to [try it out](https://github.com/xenexx-arch/Xeria-Launcher/releases).
-
-list of every OS supported:
+Supported OSes:
 Linux:                                           Windows:
 Debian                                           Windows 11
 Arch                                             Windows 10
@@ -20,7 +18,7 @@ Void                                             Windows 7 (??)
 Gentoo
 Slackware (?)
 
-Mac:
+MacOS:
 None yet!
 
-(?) - will launch (probably), (??) - low chances, (???) - tweaking required
+So, what are you waiting for? Feel free to [try it out](https://github.com/xenexx-arch/Xeria-Launcher/releases).
