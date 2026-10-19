@@ -1,8 +1,8 @@
 from pathlib import Path
-from PyQt5.QtCore import QSize, QUrl
-from PyQt5.QtGui import QIcon, QPixmap
-from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
-from PyQt5.QtWidgets import QApplication, QStyle
+from PyQt6.QtCore import QSize, QUrl
+from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
+from PyQt6.QtWidgets import QApplication, QStyle
 from core import theme
 from core import paths
 
@@ -18,11 +18,11 @@ ICON_SIZE = QSize(16, 16)
 ICON_SIZE_LG = QSize(20, 20)
 
 LOADER_ICON = {
-    "vanilla":  ("applications-games",          QStyle.SP_DesktopIcon),
-    "fabric":   ("applications-science",        QStyle.SP_FileDialogContentsView),
-    "forge":    ("applications-engineering",    QStyle.SP_ComputerIcon),
-    "neoforge": ("applications-engineering",    QStyle.SP_ComputerIcon),
-    "quilt":    ("applications-science",        QStyle.SP_FileDialogContentsView),
+    "vanilla":  ("applications-games",          QStyle.StandardPixmap.SP_DesktopIcon),
+    "fabric":   ("applications-science",        QStyle.StandardPixmap.SP_FileDialogContentsView),
+    "forge":    ("applications-engineering",    QStyle.StandardPixmap.SP_ComputerIcon),
+    "neoforge": ("applications-engineering",    QStyle.StandardPixmap.SP_ComputerIcon),
+    "quilt":    ("applications-science",        QStyle.StandardPixmap.SP_FileDialogContentsView),
 }
 
 
@@ -134,17 +134,21 @@ def fetch_mc_icon(callback):
     if _mc_nam is None:
         _mc_nam = QNetworkAccessManager()
     req = QNetworkRequest(QUrl(MC_ICON_URL))
-    req.setAttribute(QNetworkRequest.FollowRedirectsAttribute, True)
+    req.setAttribute(
+        QNetworkRequest.Attribute.RedirectPolicyAttribute,
+        QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy)
     reply = _mc_nam.get(req)
 
     def done(r=reply):
-        if r.error() != QNetworkReply.NoError:
+        if r.error() != QNetworkReply.NetworkError.NoError:
             r.deleteLater(); return
         data = r.readAll(); r.deleteLater()
         pm = QPixmap()
         if not pm.loadFromData(data) or pm.isNull():
             return
-        pm = pm.scaled(20, 20, aspectRatioMode=1, transformMode=1)
+        pm = pm.scaled(20, 20,
+                       aspectRatioMode=1,
+                       transformMode=1)
         try:
             pm.save(str(MC_ICON_PATH), "PNG")
         except Exception:

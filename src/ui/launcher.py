@@ -5,7 +5,8 @@ from PyQt6.QtCore import (
     Qt, QTimer, pyqtSignal, QSize, QPropertyAnimation, QEasingCurve, QRect,
 )
 from PyQt6.QtGui import QFont, QColor, QPalette, QIcon, QAction
-from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QUrl
+from PyQt6.QtCore import QUrl
+from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QPushButton, QListWidget, QListWidgetItem, QMenu,

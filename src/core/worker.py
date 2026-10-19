@@ -1,5 +1,5 @@
 import threading
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal
 
 _shutdown = threading.Event()
 _leaked_threads = []
