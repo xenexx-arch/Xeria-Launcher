@@ -88,6 +88,7 @@ class DetailPanel(QFrame):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
+        # ---- Header (icon + title + meta) ----
         header = QFrame()
         header.setStyleSheet(
             f"QFrame{{background:{theme.BG2};border:none;"
@@ -138,6 +139,7 @@ class DetailPanel(QFrame):
         hh.addWidget(text_host, 1)
         outer.addWidget(header)
 
+        # ---- Description body ----
         self.desc_view = QTextBrowser()
         self.desc_view.setOpenExternalLinks(False)
         self.desc_view.setOpenLinks(False)
@@ -161,10 +163,11 @@ class DetailPanel(QFrame):
             f"a {{ color: {theme.ACCENT}; text-decoration: underline; }}")
         outer.addWidget(self.desc_view, 1)
 
+        # ---- Screenshots strip (recoloured) ----
         self.shots_frame = QFrame()
         self.shots_frame.setStyleSheet(
             f"QFrame{{background:{theme.BG3};border:none;"
-            f"border-top:1px solid {theme.BORDER}}}")
+            f"border-top:1px solid {theme.ACCENT}}}")
         self.shots_frame.setFixedHeight(self.SHOTS_HEIGHT)
         self.shots_frame.setVisible(False)
 
@@ -173,9 +176,11 @@ class DetailPanel(QFrame):
         sf.setSpacing(0)
 
         shots_header = QLabel("  Screenshots")
-        shots_header.setFixedHeight(20)
+        shots_header.setFixedHeight(22)
         shots_header.setStyleSheet(
-            f"color:{theme.GRAY};font-size:8pt;font-weight:bold;"
+            f"color:{theme.ACCENT};"
+            f"font-family:'{theme.UI_FONT}';font-size:8pt;"
+            f"font-weight:bold;letter-spacing:1px;"
             f"background:transparent;border:none")
         sf.addWidget(shots_header)
 
@@ -188,16 +193,20 @@ class DetailPanel(QFrame):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.shots_scroll.setStyleSheet(
             f"QScrollArea{{background:{theme.BG3};border:none}}"
-            f"QScrollBar:horizontal{{background:{theme.BG3};height:8px;margin:0}}"
-            f"QScrollBar::handle{{background:{theme.BORDER};min-width:20px}}"
-            f"QScrollBar::add-line,QScrollBar::sub-line{{width:0}}"
+            f"QScrollBar:horizontal{{background:{theme.BG2};height:8px;"
+            f"margin:0}}"
+            f"QScrollBar::handle{{background:{theme.BORDER};"
+            f"min-width:20px}}"
+            f"QScrollBar::handle:hover{{background:{theme.FG}}}"
+            f"QScrollBar::add-line,QScrollBar::sub-line{{width:0;height:0}}"
             f"QScrollBar::add-page,QScrollBar::sub-page{{background:transparent}}")
 
         self.shots_host = QWidget()
-        self.shots_host.setStyleSheet("background:transparent;border:none")
+        self.shots_host.setStyleSheet(
+            f"background:{theme.BG3};border:none")
         self.shots_row = QHBoxLayout(self.shots_host)
         self.shots_row.setContentsMargins(8, 4, 8, 8)
-        self.shots_row.setSpacing(6)
+        self.shots_row.setSpacing(8)
         self.shots_row.addStretch(1)
         self.shots_scroll.setWidget(self.shots_host)
         sf.addWidget(self.shots_scroll, 1)
@@ -207,6 +216,8 @@ class DetailPanel(QFrame):
         self.setMinimumWidth(0)
         self.setMaximumWidth(0)
         self.setVisible(False)
+
+    # ---- Actions ---------------------------------------------------------
 
     def _open_link(self, url):
         QDesktopServices.openUrl(url)
@@ -242,6 +253,8 @@ class DetailPanel(QFrame):
             a.finished.connect(on_done)
         self._anim = a
         a.start()
+
+    # ---- Content ---------------------------------------------------------
 
     def show_project(self, hit):
         self.pid = hit.get("id") or hit.get("project_id")

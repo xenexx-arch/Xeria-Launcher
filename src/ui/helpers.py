@@ -37,8 +37,10 @@ def s_icon_btn(bg, fg, hover, size=32):
 def s_plus_btn(size=28):
     fg = theme.on_accent()
     return (f"QPushButton{{background:{theme.ACCENT};color:{fg};"
-            f"border:none;font-size:14pt;font-weight:bold;"
-            f"min-height:38px;max-height:38px;padding:0 16px}}"
+            f"border:none;font-size:18pt;font-weight:bold;"
+            f"min-width:40px;max-width:40px;"
+            f"min-height:40px;max-height:40px;"
+            f"padding:0;line-height:1}}"
             f"QPushButton:hover{{background:{theme.ACCENT2}}}")
 
 
@@ -60,7 +62,9 @@ def s_btn_launch():
     fg = theme.on_accent()
     return (f"QPushButton{{background:{theme.ACCENT};color:{fg};"
             f"border:none;font-weight:bold;font-size:11pt;"
-            f"min-height:38px;max-height:38px;padding:0 20px;"
+            f"min-width:140px;"
+            f"min-height:40px;max-height:40px;"
+            f"padding:0 20px;"
             f"font-family:\"{theme.UI_FONT}\"}}"
             f"QPushButton:hover{{background:{theme.ACCENT2}}}")
 

@@ -146,6 +146,8 @@ def square_icon(icon, side):
     return square_icon_pixmap(src, side)
 
 
+# ---- Icon decoding (square, for list rows / detail header) ----------------
+
 class _DecodeTask(QRunnable):
     def __init__(self, loader, project_id, path, data):
         super().__init__()
@@ -354,6 +356,43 @@ class IconLoader(QObject):
         self._pump()
 
 
+# ---- Gallery (screenshots) ------------------------------------------------
+
+def decode_screenshot(data):
+    """Decode a screenshot at full colour, no cropping, no squaring."""
+    if not data:
+        return None
+    pm = QPixmap()
+    if pm.loadFromData(data) and not pm.isNull():
+        return pm
+    if _HAS_PIL:
+        try:
+            img = Image.open(io.BytesIO(bytes(data))).convert("RGBA")
+            qimg = QImage(img.tobytes(), img.width, img.height,
+                          QImage.Format.Format_RGBA8888).copy()
+            pm2 = QPixmap.fromImage(qimg)
+            if not pm2.isNull():
+                return pm2
+        except Exception:
+            pass
+    return None
+
+
+class _ShotDecodeFull(QRunnable):
+    def __init__(self, loader, pid, idx, data):
+        super().__init__()
+        self.loader = loader
+        self.pid = pid
+        self.idx = idx
+        self.data = bytes(data)
+        self.setAutoDelete(True)
+
+    @pyqtSlot()
+    def run(self):
+        pm = decode_screenshot(self.data)
+        self.loader._decode_done.emit(self.pid, self.idx, pm)
+
+
 class GalleryLoader(QObject):
     shot_ready = pyqtSignal(str, int, object)
     _decode_done = pyqtSignal(str, int, object)
@@ -420,25 +459,7 @@ class GalleryLoader(QObject):
         if err != QNetworkReply.NetworkError.NoError or status != 200:
             self.shot_ready.emit(pid, idx, None)
             return
-        self._pool.start(_ShotDecode(self, pid, idx, data))
+        self._pool.start(_ShotDecodeFull(self, pid, idx, data))
 
     def _on_decode_done(self, pid, idx, pm):
         self.shot_ready.emit(pid, idx, pm)
-
-
-class _ShotDecode(QRunnable):
-    def __init__(self, loader, pid, idx, data):
-        super().__init__()
-        self.loader = loader
-        self.pid = pid
-        self.idx = idx
-        self.data = bytes(data)
-        self.setAutoDelete(True)
-
-    @pyqtSlot()
-    def run(self):
-        pm = decode_image(self.data)
-        if pm is None:
-            self.loader._decode_done.emit(self.pid, self.idx, None)
-            return
-        self.loader._decode_done.emit(self.pid, self.idx, pm)

@@ -3,7 +3,7 @@ from PyQt6.QtCore import Qt
 
 from core.paths import MANIFEST_URL
 from core.worker import Worker
-from integration import http
+from integration import net as http
 
 
 class FetchMixin:

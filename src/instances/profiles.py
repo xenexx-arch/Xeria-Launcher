@@ -15,7 +15,7 @@ from ui.dialogs import (ChooseInstallDialog, ModpackSearchDialog,
                         ProfileDialog)
 from ui.helpers import s_menu
 from ui.loader_icons import loader_icon_sync, fetch_loader_icon
-from integration import http
+from integration import net as http
 
 
 class ProfilesMixin:
@@ -142,10 +142,14 @@ class ProfilesMixin:
 
     def add_new(self):
         ch = ChooseInstallDialog(self)
-        if ch.exec() != QDialog.DialogCode.Accepted or not ch.choice: return
-        if ch.choice == "blank": self._add_blank_profile()
-        elif ch.choice == "local": self._add_local_modpack()
-        elif ch.choice == "modrinth": self._add_modrinth_modpack()
+        if ch.exec() != QDialog.DialogCode.Accepted or not ch.choice:
+            return
+        if ch.choice == "blank":
+            self._add_blank_profile()
+        elif ch.choice == "local":
+            self._add_local_modpack()
+        elif ch.choice == "modrinth":
+            self._add_modrinth_modpack()
 
     def _add_blank_profile(self):
         if not self.releases:
@@ -156,21 +160,29 @@ class ProfilesMixin:
                                  if v["type"] == "release"]
             except Exception as e:
                 QMessageBox.critical(self, "Error",
-                                     f"Cannot fetch versions:\n{e}"); return
+                                     f"Cannot fetch versions:\n{e}")
+                return
         dlg = ProfileDialog(self, self.releases, self.settings)
-        if dlg.exec() != QDialog.DialogCode.Accepted: return
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
         name, ver, ram, loader = dlg.values()
         if not name:
-            QMessageBox.warning(self, "Error", "Name required."); return
+            QMessageBox.warning(self, "Error", "Name required.")
+            return
         if any(c in name for c in r'/\:*?"<>|'):
-            QMessageBox.warning(self, "Error", "Invalid characters."); return
+            QMessageBox.warning(self, "Error", "Invalid characters.")
+            return
         if (PROFILES_DIR / f"{name}.json").exists():
             QMessageBox.warning(self, "Exists",
-                                f"'{name}' already exists."); return
+                                f"'{name}' already exists.")
+            return
         p = Profile(name)
-        p.version = ver; p.ram = ram; p.loader = loader
+        p.version = ver
+        p.ram = ram
+        p.loader = loader
         dlg.apply(p)
-        p.dir; p.save()
+        p.dir
+        p.save()
         self.console.log("ok", f"created '{name}'")
         self.load_profiles()
 
@@ -178,7 +190,8 @@ class ProfilesMixin:
         path, _ = QFileDialog.getOpenFileName(
             self, "Open Modpack", str(Path.home()),
             "Modpacks (*.xerpack *.zip *.mrpack);;All files (*)")
-        if not path: return
+        if not path:
+            return
         w = Worker(self._install_local_modpack_task, path)
         w.log.connect(self.console.log, Qt.ConnectionType.QueuedConnection)
         w.progress.connect(
@@ -187,8 +200,10 @@ class ProfilesMixin:
         w.progress_end.connect(
             lambda: self.console.log("progress_end", None),
             Qt.ConnectionType.QueuedConnection)
-        w.done.connect(self._modpack_done, Qt.ConnectionType.QueuedConnection)
-        self._track(w); w.start()
+        w.done.connect(self._modpack_done,
+                       Qt.ConnectionType.QueuedConnection)
+        self._track(w)
+        w.start()
 
     def _install_local_modpack_task(self, path, log, progress, progress_end):
         from integration import modpack
@@ -197,7 +212,8 @@ class ProfilesMixin:
 
     def _add_modrinth_modpack(self):
         dlg = ModpackSearchDialog(self, self.console.log)
-        if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.result: return
+        if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.result:
+            return
         hit = dlg.result
         w = Worker(self._download_and_install_modpack, hit)
         w.log.connect(self.console.log, Qt.ConnectionType.QueuedConnection)
@@ -207,33 +223,42 @@ class ProfilesMixin:
         w.progress_end.connect(
             lambda: self.console.log("progress_end", None),
             Qt.ConnectionType.QueuedConnection)
-        w.done.connect(self._modpack_done, Qt.ConnectionType.QueuedConnection)
-        self._track(w); w.start()
+        w.done.connect(self._modpack_done,
+                       Qt.ConnectionType.QueuedConnection)
+        self._track(w)
+        w.start()
 
     def _download_and_install_modpack(self, hit, log, progress, progress_end):
         from integration import modrinth, modpack
         picked = modrinth.pick_modpack_file(hit["id"])
         if not picked:
-            log("error", "no .mrpack found"); return None
+            log("error", "no .mrpack found")
+            return None
         url, filename, ver = picked
         log("ok", f"version {ver}: {filename}")
         tmp = Path(tempfile.gettempdir()) / filename
         try:
             with http.stream("GET", url) as r:
                 r.raise_for_status()
-                total = int(r.headers.get("content-length", 0)); done = 0
+                total = int(r.headers.get("content-length", 0))
+                done = 0
                 with open(tmp, "wb") as f:
                     for chunk in r.iter_bytes(65536):
-                        f.write(chunk); done += len(chunk)
+                        f.write(chunk)
+                        done += len(chunk)
                         if total and progress:
                             progress(filename, done, total, "", "")
-            if progress_end: progress_end()
+            if progress_end:
+                progress_end()
         except Exception as e:
-            log("error", f"download failed: {e}"); return None
+            log("error", f"download failed: {e}")
+            return None
         name = modpack.install(str(tmp), log=log, progress=progress,
                                progress_end=progress_end)
-        try: tmp.unlink()
-        except Exception: pass
+        try:
+            tmp.unlink()
+        except Exception:
+            pass
         return name
 
     def _modpack_done(self, name):
@@ -244,98 +269,130 @@ class ProfilesMixin:
             self.console.log("error", "modpack install failed")
 
     def edit_profile(self):
-        if not self.current_profile: return
+        if not self.current_profile:
+            return
         p = self.current_profile
         dlg = ProfileDialog(self, self.releases, self.settings, profile=p)
-        if dlg.exec() != QDialog.DialogCode.Accepted: return
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
         name, ver, ram, loader = dlg.values()
         if not name:
-            QMessageBox.warning(self, "Error", "Name required."); return
+            QMessageBox.warning(self, "Error", "Name required.")
+            return
         old = p.name
         if name != old:
             if any(c in name for c in r'/\:*?"<>|'):
                 QMessageBox.warning(self, "Error",
-                                    "Invalid characters."); return
+                                    "Invalid characters.")
+                return
             if (PROFILES_DIR / f"{name}.json").exists():
                 QMessageBox.warning(self, "Exists",
-                                    f"'{name}' exists."); return
+                                    f"'{name}' exists.")
+                return
             (PROFILES_DIR / f"{old}.json").rename(
                 PROFILES_DIR / f"{name}.json")
             if (PROFILES_DIR / old).exists():
                 (PROFILES_DIR / old).rename(PROFILES_DIR / name)
             p.name = name
-        p.version = ver; p.ram = ram; p.loader = loader
+        p.version = ver
+        p.ram = ram
+        p.loader = loader
         dlg.apply(p)
-        p.save(); self.load_profiles()
+        p.save()
+        self.load_profiles()
 
     def rename_profile(self):
-        if not self.current_profile: return
+        if not self.current_profile:
+            return
         old = self.current_profile.name
-        new, ok = QInputDialog.getText(self, "Rename", "New name:", text=old)
-        if not ok or not new.strip(): return
+        new, ok = QInputDialog.getText(
+            self, "Rename", "New name:", text=old)
+        if not ok or not new.strip():
+            return
         new = new.strip()
-        if new == old: return
+        if new == old:
+            return
         if any(c in new for c in r'/\:*?"<>|'):
-            QMessageBox.warning(self, "Error", "Invalid characters."); return
+            QMessageBox.warning(self, "Error", "Invalid characters.")
+            return
         if (PROFILES_DIR / f"{new}.json").exists():
-            QMessageBox.warning(self, "Exists", f"'{new}' exists."); return
-        (PROFILES_DIR / f"{old}.json").rename(PROFILES_DIR / f"{new}.json")
+            QMessageBox.warning(self, "Exists", f"'{new}' exists.")
+            return
+        (PROFILES_DIR / f"{old}.json").rename(
+            PROFILES_DIR / f"{new}.json")
         (PROFILES_DIR / old).rename(PROFILES_DIR / new)
         self.load_profiles()
 
     def duplicate_profile(self):
-        if not self.current_profile: return
+        if not self.current_profile:
+            return
         src = self.current_profile
-        new_name = f"{src.name} (copy)"; n = 1
+        new_name = f"{src.name} (copy)"
+        n = 1
         while (PROFILES_DIR / f"{new_name}.json").exists():
-            new_name = f"{src.name} (copy {n})"; n += 1
+            new_name = f"{src.name} (copy {n})"
+            n += 1
         p = Profile(new_name)
-        p.version = src.version; p.ram = src.ram; p.loader = src.loader
+        p.version = src.version
+        p.ram = src.ram
+        p.loader = src.loader
         p.override_gc = src.override_gc
         p.override_jvm_flags = src.override_jvm_flags
         p.override_env_vars = src.override_env_vars
         p.override_java_path = src.override_java_path
         p.override_wrapper = src.override_wrapper
         p.override_nvidia_fix = getattr(src, "override_nvidia_fix", False)
-        p.dir; p.save()
+        p.mods_meta = dict(getattr(src, "mods_meta", {}) or {})
+        p.dir
+        p.save()
         try:
             if src.dir.exists():
                 shutil.copytree(str(src.dir), str(p.dir),
                                 dirs_exist_ok=True)
-        except Exception: pass
+        except Exception:
+            pass
         self.load_profiles()
 
     def delete_profile(self):
-        if not self.current_profile: return
+        if not self.current_profile:
+            return
         if QMessageBox.question(
             self, "Delete",
             f"Delete '{self.current_profile.name}'?\n"
             f"Mods and worlds removed too."
-        ) != QMessageBox.StandardButton.Yes: return
+        ) != QMessageBox.StandardButton.Yes:
+            return
         n = self.current_profile.name
         Profile.delete(n)
         self.console.log("warn", f"deleted '{n}'")
-        self.current_profile = None; self.load_profiles()
+        self.current_profile = None
+        self.load_profiles()
 
     def open_folder(self):
-        if not self.current_profile: return
+        if not self.current_profile:
+            return
         p = str(self.current_profile.dir)
         try:
-            if IS_WIN: os.startfile(p)
-            elif IS_MAC: subprocess.Popen(["open", p])
-            else: subprocess.Popen(["xdg-open", p])
+            if IS_WIN:
+                os.startfile(p)
+            elif IS_MAC:
+                subprocess.Popen(["open", p])
+            else:
+                subprocess.Popen(["xdg-open", p])
         except Exception as e:
             self.console.log("error", f"open folder failed: {e}")
 
     def export_mrpack(self):
-        if not self.current_profile: return
+        if not self.current_profile:
+            return
         p = self.current_profile
         default_name = f"{p.name}.mrpack"
         path, _ = QFileDialog.getSaveFileName(
             self, "Export as Modrinth pack",
             str(Path.home() / default_name),
             "Modrinth pack (*.mrpack);;Zip (*.zip)")
-        if not path: return
+        if not path:
+            return
         self.console.log("info", f"exporting '{p.name}' as .mrpack")
         w = Worker(self._export_task, p, path)
         w.log.connect(self.console.log, Qt.ConnectionType.QueuedConnection)
@@ -345,7 +402,8 @@ class ProfilesMixin:
         w.progress_end.connect(
             lambda: self.console.log("progress_end", None),
             Qt.ConnectionType.QueuedConnection)
-        self._track(w); w.start()
+        self._track(w)
+        w.start()
 
     def _export_task(self, profile, path, log, progress, progress_end):
         from integration import modpack
@@ -357,10 +415,12 @@ class ProfilesMixin:
         path, _ = QFileDialog.getOpenFileName(
             self, "Import instance", str(Path.home()),
             "Xeria pack (*.xeriapack *.zip *.mrpack);;All files (*)")
-        if not path: return
+        if not path:
+            return
         if path.lower().endswith(".mrpack"):
             w = Worker(self._install_local_modpack_task, path)
-            w.log.connect(self.console.log, Qt.ConnectionType.QueuedConnection)
+            w.log.connect(self.console.log,
+                          Qt.ConnectionType.QueuedConnection)
             w.progress.connect(
                 lambda *a: self.console.log("progress", a),
                 Qt.ConnectionType.QueuedConnection)
@@ -369,29 +429,36 @@ class ProfilesMixin:
                 Qt.ConnectionType.QueuedConnection)
             w.done.connect(self._modpack_done,
                            Qt.ConnectionType.QueuedConnection)
-            self._track(w); w.start()
+            self._track(w)
+            w.start()
             return
         self.console.log("info", f"importing {Path(path).name}")
 
         def task(log, progress, progress_end):
             with zipfile.ZipFile(path) as z:
                 names = z.namelist()
-                root_json = next((n for n in names
-                                  if n.endswith(".json") and "/" not in n),
-                                 None)
+                root_json = next(
+                    (n for n in names
+                     if n.endswith(".json") and "/" not in n),
+                    None)
                 if not root_json:
-                    log("error", "no profile json in pack"); return None
+                    log("error", "no profile json in pack")
+                    return None
                 data = json.loads(z.read(root_json))
                 base = Path(root_json).stem
-                name = base; n = 1
+                name = base
+                n = 1
                 while (PROFILES_DIR / f"{name}.json").exists():
-                    name = f"{base} ({n})"; n += 1
+                    name = f"{base} ({n})"
+                    n += 1
                 total = max(1, len(names))
                 for i, member in enumerate(names, 1):
-                    if member == root_json: continue
+                    if member == root_json:
+                        continue
                     target = PROFILES_DIR / member
                     if member.endswith("/"):
-                        target.mkdir(parents=True, exist_ok=True); continue
+                        target.mkdir(parents=True, exist_ok=True)
+                        continue
                     target.parent.mkdir(parents=True, exist_ok=True)
                     with z.open(member) as src, open(target, "wb") as dst:
                         shutil.copyfileobj(src, dst)
@@ -399,7 +466,8 @@ class ProfilesMixin:
                         progress("import", i, total, "", "")
                 (PROFILES_DIR / f"{name}.json").write_text(
                     json.dumps(data, indent=2))
-                if progress_end: progress_end()
+                if progress_end:
+                    progress_end()
                 log("ok", f"imported as '{name}'")
                 return name
 
@@ -413,10 +481,12 @@ class ProfilesMixin:
             Qt.ConnectionType.QueuedConnection)
         w.done.connect(lambda _: self.load_profiles(),
                        Qt.ConnectionType.QueuedConnection)
-        self._track(w); w.start()
+        self._track(w)
+        w.start()
 
     def backup_instance(self):
-        if not self.current_profile: return
+        if not self.current_profile:
+            return
         import datetime
         p = self.current_profile
         backups = XERIA_ROOT / "backups"
@@ -431,7 +501,8 @@ class ProfilesMixin:
             for sub in ("mods", "resourcepacks", "shaderpacks",
                         "config", "saves"):
                 d = game_dir / sub
-                if not d.exists(): continue
+                if not d.exists():
+                    continue
                 for f in d.rglob("*"):
                     if f.is_file():
                         files.append((f, str(f.relative_to(game_dir))))
@@ -441,7 +512,8 @@ class ProfilesMixin:
                     z.write(src, arc)
                     if progress and i % 20 == 0:
                         progress("backup", i, total, "", "")
-            if progress_end: progress_end()
+            if progress_end:
+                progress_end()
             log("ok", f"backup saved ({dest.stat().st_size // 1024} KB)")
 
         w = Worker(task)
@@ -452,10 +524,12 @@ class ProfilesMixin:
         w.progress_end.connect(
             lambda: self.console.log("progress_end", None),
             Qt.ConnectionType.QueuedConnection)
-        self._track(w); w.start()
+        self._track(w)
+        w.start()
 
     def copy_launch_command(self):
-        if not self.current_profile: return
+        if not self.current_profile:
+            return
         p = self.current_profile
         try:
             from core.java import best_java as _bj
@@ -484,7 +558,8 @@ class ProfilesMixin:
                 "--versionType", "release"]
             wrapper = (p.override_wrapper or
                        self.settings.get("wrapper_command", "").strip())
-            if wrapper: cmd = _sh.split(wrapper) + cmd
+            if wrapper:
+                cmd = _sh.split(wrapper) + cmd
             text = " ".join(_sh.quote(c) for c in cmd)
             from PyQt6.QtGui import QGuiApplication
             QGuiApplication.clipboard().setText(text)
@@ -493,12 +568,16 @@ class ProfilesMixin:
             self.console.log("error", f"copy command failed: {e}")
 
     def open_logs(self):
-        if not self.current_profile: return
+        if not self.current_profile:
+            return
         logs = self.current_profile.dir / "logs"
         logs.mkdir(parents=True, exist_ok=True)
         try:
-            if IS_WIN: os.startfile(str(logs))
-            elif IS_MAC: subprocess.Popen(["open", str(logs)])
-            else: subprocess.Popen(["xdg-open", str(logs)])
+            if IS_WIN:
+                os.startfile(str(logs))
+            elif IS_MAC:
+                subprocess.Popen(["open", str(logs)])
+            else:
+                subprocess.Popen(["xdg-open", str(logs)])
         except Exception as e:
             self.console.log("error", f"open logs failed: {e}")

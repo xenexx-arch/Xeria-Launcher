@@ -3,19 +3,21 @@ import json
 from pathlib import Path
 from urllib.parse import urlencode
 import httpx
-from PyQt6.QtCore import Qt, QTimer, QSize, QUrl
+from PyQt6.QtCore import Qt, QTimer, QSize, QUrl, pyqtSignal
 from PyQt6.QtGui import QIcon
-from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+from PyQt6.QtNetwork import (
+    QNetworkAccessManager, QNetworkRequest, QNetworkReply,
+)
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QLineEdit, QListWidget, QListWidgetItem, QWidget,
-    QPushButton, QMessageBox, QStyle,
+    QPushButton, QMessageBox, QStyle, QSizePolicy,
 )
 from core import theme
 from core import hardware
 from core.worker import Worker
 from ui.console import MiniConsole
-from integration import http
+from integration import net as http
 
 from browse.common import (
     ICON_SIZE_ROW, _ICON_CACHE, make_placeholder,
@@ -36,6 +38,8 @@ class BrowseBase(QDialog):
     HEADER_ICON = "package-x-generic"
     VANILLA_WARN = None
 
+    install_finished = pyqtSignal(str)
+
     ROW_PAD = 4
     ROW_GAP = 6
 
@@ -48,9 +52,12 @@ class BrowseBase(QDialog):
         self._rows = {}
         self._selected_row = -1
         self._search_reply = None
+        self._last_silent = False
+        self._deleted = False
 
         self.setWindowTitle(f"{self.TITLE} — {profile.name}")
-        self.resize(1080, 680); self.setMinimumSize(760, 460)
+        self.resize(1180, 720)
+        self.setMinimumSize(920, 580)
         self.setStyleSheet(f"QDialog{{background:{theme.BG};border:none}}")
 
         win_ic = QIcon.fromTheme("applications-games")
@@ -60,9 +67,11 @@ class BrowseBase(QDialog):
         self._nam = QNetworkAccessManager(self)
 
         v = QVBoxLayout(self)
-        v.setContentsMargins(10, 10, 10, 10); v.setSpacing(6)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(6)
 
-        head_row = QHBoxLayout(); head_row.setSpacing(6)
+        head_row = QHBoxLayout()
+        head_row.setSpacing(6)
         head_ic = QLabel()
         hi = QIcon.fromTheme(self.HEADER_ICON)
         if hi.isNull():
@@ -70,19 +79,25 @@ class BrowseBase(QDialog):
         if not hi.isNull():
             head_ic.setPixmap(hi.pixmap(20, 20))
         head = QLabel(f"{self.TITLE}  →  {profile.name}")
-        head.setStyleSheet(f"color:{theme.FG};font-size:13pt;font-weight:bold;"
-                           f"background:transparent;border:none")
-        head_row.addWidget(head_ic); head_row.addWidget(head); head_row.addStretch()
+        head.setStyleSheet(
+            f"color:{theme.FG};font-size:13pt;font-weight:bold;"
+            f"background:transparent;border:none")
+        head_row.addWidget(head_ic)
+        head_row.addWidget(head)
+        head_row.addStretch()
         v.addLayout(head_row)
 
-        if self.VANILLA_WARN and (profile.loader or "vanilla").lower() == "vanilla":
+        if (self.VANILLA_WARN
+                and (profile.loader or "vanilla").lower() == "vanilla"):
             warn = QLabel(self.VANILLA_WARN)
             warn.setStyleSheet(
                 f"color:{theme.YELLOW};font-size:9pt;padding:6px;"
                 f"background:{theme.BG2};border:none")
-            warn.setWordWrap(True); v.addWidget(warn)
+            warn.setWordWrap(True)
+            v.addWidget(warn)
 
-        row = QHBoxLayout(); row.setSpacing(0)
+        row = QHBoxLayout()
+        row.setSpacing(0)
         self.search = QLineEdit()
         self.search.setPlaceholderText(self.SEARCH_PH)
         self.search.setStyleSheet(
@@ -90,7 +105,8 @@ class BrowseBase(QDialog):
             f"border:none;padding:8px}}")
         search_ic = QIcon.fromTheme("edit-find")
         if not search_ic.isNull():
-            self.search.addAction(search_ic, QLineEdit.ActionPosition.LeadingPosition)
+            self.search.addAction(
+                search_ic, QLineEdit.ActionPosition.LeadingPosition)
         row.addWidget(self.search, 1)
         v.addLayout(row)
 
@@ -99,21 +115,27 @@ class BrowseBase(QDialog):
 
         left = QWidget()
         left.setStyleSheet("background:transparent")
+        left.setMinimumWidth(360)
+        left.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Expanding)
         ll = QVBoxLayout(left)
-        ll.setContentsMargins(0, 0, 0, 0); ll.setSpacing(4)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.setSpacing(4)
 
         self.list = QListWidget()
         self.list.setFrameShape(QFrame.Shape.NoFrame)
         self.list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.list.setIconSize(QSize(ICON_SIZE_ROW, ICON_SIZE_ROW))
-        self.list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.list.setVerticalScrollMode(
+            QListWidget.ScrollMode.ScrollPerPixel)
         self.list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.setStyleSheet(
             f"QListWidget{{background:{theme.BG2};color:{theme.FG};"
             f"border:none;padding:0;outline:0}}"
             f"QListWidget::item{{padding:0;border:none}}"
-            f"QListWidget::item:selected{{background:{theme.BG3};border:none}}"
+            f"QListWidget::item:selected{{background:{theme.BG3};"
+            f"border:none}}"
             f"QListWidget::item:hover{{background:{theme.BG3};border:none}}"
             f"QScrollBar:vertical{{background:{theme.BG2};width:8px;margin:0}}"
             f"QScrollBar::handle{{background:{theme.BG3};min-height:20px}}"
@@ -129,23 +151,28 @@ class BrowseBase(QDialog):
         self.log_frame.setStyleSheet(
             f"QFrame{{background:{theme.BG2};border:none}}")
         lfl = QVBoxLayout(self.log_frame)
-        lfl.setContentsMargins(0, 0, 0, 0); lfl.setSpacing(0)
+        lfl.setContentsMargins(0, 0, 0, 0)
+        lfl.setSpacing(0)
         lh_row = QHBoxLayout()
-        lh_row.setContentsMargins(6, 4, 6, 4); lh_row.setSpacing(6)
+        lh_row.setContentsMargins(6, 4, 6, 4)
+        lh_row.setSpacing(6)
         lh_ic = QLabel()
         li = QIcon.fromTheme("utilities-terminal")
         if not li.isNull():
             lh_ic.setPixmap(li.pixmap(16, 16))
         lh_row.addWidget(lh_ic)
         lh = QLabel("Activity")
-        lh.setStyleSheet(f"color:{theme.GRAY};font-size:8pt;"
-                         f"background:transparent;border:none")
-        lh_row.addWidget(lh); lh_row.addStretch(1)
+        lh.setStyleSheet(
+            f"color:{theme.GRAY};font-size:8pt;"
+            f"background:transparent;border:none")
+        lh_row.addWidget(lh)
+        lh_row.addStretch(1)
         lfl.addLayout(lh_row)
         self.log_view = MiniConsole()
         self.log_view.setMaximumHeight(90)
         lfl.addWidget(self.log_view, 1)
-        ll.addWidget(self.log_frame)
+        self.log_frame.setMinimumHeight(100)
+        ll.addWidget(self.log_frame, 0)
 
         body.addWidget(left, 1)
 
@@ -154,22 +181,38 @@ class BrowseBase(QDialog):
 
         v.addLayout(body, 1)
 
-        btns = QHBoxLayout(); btns.setSpacing(6)
+        btns = QHBoxLayout()
+        btns.setSpacing(6)
         refresh = QPushButton("Refresh")
-        refresh.setIcon(self._icon("view-refresh", QStyle.StandardPixmap.SP_BrowserReload))
+        refresh.setIcon(self._icon(
+            "view-refresh", QStyle.StandardPixmap.SP_BrowserReload))
         refresh.setIconSize(QSize(16, 16))
         refresh.setStyleSheet(self._btn_style())
+        refresh.setMinimumWidth(110)
+        refresh.setSizePolicy(QSizePolicy.Policy.Preferred,
+                              QSizePolicy.Policy.Fixed)
+        refresh.setAutoDefault(False)
+        refresh.setDefault(False)
         refresh.clicked.connect(self.search_now)
-        btns.addWidget(refresh); btns.addStretch()
+        btns.addWidget(refresh)
+        btns.addStretch()
 
         self.install_btn = QPushButton("Install Selected")
-        self.install_btn.setIcon(self._icon("download", QStyle.StandardPixmap.SP_ArrowDown))
+        self.install_btn.setIcon(self._icon(
+            "download", QStyle.StandardPixmap.SP_ArrowDown))
         self.install_btn.setIconSize(QSize(16, 16))
         self.install_btn.setStyleSheet(
-            f"QPushButton{{background:{theme.ACCENT};color:{theme.on_accent()};"
+            f"QPushButton{{background:{theme.ACCENT};"
+            f"color:{theme.on_accent()};"
             f"border:none;padding:8px 20px;font-weight:bold}}"
             f"QPushButton:hover{{background:{theme.ACCENT2}}}"
-            f"QPushButton:disabled{{background:{theme.BG3};color:{theme.GRAY}}}")
+            f"QPushButton:disabled{{background:{theme.BG3};"
+            f"color:{theme.GRAY}}}")
+        self.install_btn.setMinimumWidth(160)
+        self.install_btn.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                       QSizePolicy.Policy.Fixed)
+        self.install_btn.setAutoDefault(False)
+        self.install_btn.setDefault(False)
         self.install_btn.clicked.connect(self.install_selected)
         btns.addWidget(self.install_btn)
         v.addLayout(btns)
@@ -186,8 +229,35 @@ class BrowseBase(QDialog):
         self.gallery_loader.shot_ready.connect(self._on_shot_ready)
 
         self.search.textChanged.connect(self._schedule_search)
-        self.search.setFocus()
+        self.search.returnPressed.connect(self.search_now)
         self._log("info", f"ready — {self.TITLE} on {profile.name}")
+        QTimer.singleShot(0, self._focus_search)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            if self.search.text():
+                self.search.clear()
+                self._last_query = ""
+                self.list.clear()
+                self.results_data = []
+                self._rows.clear()
+                self.detail.pid = None
+                self.detail.close_panel()
+                event.accept()
+                return
+            super().keyPressEvent(event)
+            return
+        super().keyPressEvent(event)
+
+    def _focus_search(self):
+        if self._deleted:
+            return
+        self.search.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.search.selectAll()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._focus_search)
 
     def _row_height(self):
         return ICON_SIZE_ROW + self.ROW_PAD * 2 + self.ROW_GAP
@@ -224,7 +294,13 @@ class BrowseBase(QDialog):
         return ic if not ic.isNull() else self.style().standardIcon(fallback)
 
     def _log(self, tag, msg):
-        self.log_view.log(tag, msg); self.log_fn(tag, msg)
+        if self._deleted:
+            return
+        try:
+            self.log_view.log(tag, msg)
+        except RuntimeError:
+            pass
+        self.log_fn(tag, msg)
 
     def _schedule_search(self, _):
         q = self.search.text().strip()
@@ -234,10 +310,13 @@ class BrowseBase(QDialog):
         self._debounce.start()
 
     def search_now(self, silent=False):
+        if self._deleted:
+            return
         self._debounce.stop()
         q = self.search.text().strip()
         if not q:
-            self.list.clear(); self.results_data = []
+            self.list.clear()
+            self.results_data = []
             self._rows.clear()
             self.detail.pid = None
             self.detail.close_panel()
@@ -245,7 +324,9 @@ class BrowseBase(QDialog):
         if q == self._last_query and not silent:
             return
         self._last_query = q
-        self._req_id += 1; rid = self._req_id
+        self._last_silent = silent
+        self._req_id += 1
+        rid = self._req_id
 
         if self._search_reply is not None:
             try:
@@ -271,12 +352,21 @@ class BrowseBase(QDialog):
         self._log("net", f"query '{q}' ({self.KIND})")
         reply = self._nam.get(req)
         self._search_reply = reply
-        reply.finished.connect(lambda r=reply, r_=rid: self._on_search(r, r_))
+        reply.finished.connect(
+            lambda r=reply, r_=rid: self._on_search(r, r_))
 
     def _on_search(self, reply, rid):
+        if self._deleted:
+            try:
+                reply.deleteLater()
+            except Exception:
+                pass
+            return
         if rid != self._req_id:
-            try: reply.deleteLater()
-            except Exception: pass
+            try:
+                reply.deleteLater()
+            except Exception:
+                pass
             return
         status = reply.attribute(
             QNetworkRequest.Attribute.HttpStatusCodeAttribute)
@@ -293,13 +383,26 @@ class BrowseBase(QDialog):
             self._log("error", f"search parse failed: {e}")
             return
         hits = self._parse_search_response(obj)
-        self._apply(hits, rid)
+        self._apply(hits, rid, self._last_silent)
 
     def _installed_keys(self):
         d = self.profile.dir / self.FOLDER
         if not d.exists():
             return set()
-        return {f.stem.lower().split("-")[0] for f in d.iterdir()}
+        keys = set()
+        for f in d.iterdir():
+            try:
+                if not f.is_file():
+                    continue
+            except Exception:
+                continue
+            stem = f.stem.lower()
+            keys.add(stem)
+            base = stem.split("-")[0]
+            keys.add(base)
+            keys.add(base.replace("_", ""))
+            keys.add(stem.replace("-", "").replace("_", ""))
+        return keys
 
     def _same_as_current(self, hits):
         if not hits or len(hits) != len(self.results_data):
@@ -310,7 +413,9 @@ class BrowseBase(QDialog):
                 return False
         return True
 
-    def _apply(self, hits, rid):
+    def _apply(self, hits, rid, silent=False):
+        if self._deleted:
+            return
         if rid != self._req_id:
             return
         hits = hits or []
@@ -324,11 +429,15 @@ class BrowseBase(QDialog):
 
         for h in self.results_data:
             key = h["title"].lower().replace(" ", "")
-            is_installed = key in installed
+            is_installed = (key in installed
+                            or key.replace("_", "") in installed
+                            or key.replace(" ", "").replace("_", "")
+                                 in installed)
 
             it = QListWidgetItem()
             it.setSizeHint(QSize(0, self._row_height()))
-            it.setData(Qt.ItemDataRole.UserRole + 1, h.get("id") or h.get("project_id"))
+            it.setData(Qt.ItemDataRole.UserRole + 1,
+                       h.get("id") or h.get("project_id"))
             it.setData(Qt.ItemDataRole.UserRole + 2, is_installed)
             self.list.addItem(it)
 
@@ -337,15 +446,20 @@ class BrowseBase(QDialog):
             self._rows[h.get("id") or h.get("project_id")] = row
 
         if self.results_data:
-            self._log("ok", f"{len(self.results_data)} results")
+            if not silent:
+                self._log("ok", f"{len(self.results_data)} results")
             self.list.setCurrentRow(0)
             QTimer.singleShot(50, self._request_visible_icons)
+            QTimer.singleShot(0, self._focus_search)
         else:
-            self._log("warn", "no results")
+            if not silent:
+                self._log("warn", "no results")
             self.detail.pid = None
             self.detail.close_panel()
 
     def _request_visible_icons(self, *args):
+        if self._deleted:
+            return
         if not self.results_data:
             return
         if not HW.prefetch_icons:
@@ -361,17 +475,24 @@ class BrowseBase(QDialog):
             if last < 0:
                 last = len(self.results_data) - 1
             first = max(0, first - HW.icon_prefetch_ahead)
-            last = min(len(self.results_data), last + HW.icon_prefetch_ahead + 1)
+            last = min(len(self.results_data),
+                       last + HW.icon_prefetch_ahead + 1)
         for i in range(first, last):
             if i < 0 or i >= len(self.results_data):
                 continue
             pid = (self.results_data[i].get("id") or
                    self.results_data[i].get("project_id"))
             if pid:
-                self.icon_loader.request(pid)
+                try:
+                    self.icon_loader.request(pid)
+                except RuntimeError:
+                    return
 
     def _make_row(self, hit, is_installed):
         row = QWidget()
+        row.setMinimumHeight(self._row_height())
+        row.setSizePolicy(QSizePolicy.Policy.Expanding,
+                          QSizePolicy.Policy.Fixed)
         row.setObjectName("modRow")
         row.setStyleSheet(
             f"QWidget#modRow{{background:transparent;border:none;"
@@ -409,24 +530,36 @@ class BrowseBase(QDialog):
         title.setStyleSheet(
             f"color:{theme.FG};font-weight:bold;font-size:11pt;"
             f"font-family:'{theme.UI_FONT}';background:transparent")
-        title_row.addWidget(title)
+        title.setWordWrap(False)
+        title.setTextInteractionFlags(
+            Qt.TextInteractionFlag.NoTextInteraction)
+        title_row.addWidget(title, 1)
 
         if is_installed:
+            from PyQt6.QtGui import QColor
+            base_accent = QColor(theme.ACCENT)
+            green = QColor(theme.GREEN)
+            badge_color = QColor(
+                (base_accent.red() + green.red()) // 2,
+                (base_accent.green() + green.green()) // 2,
+                (base_accent.blue() + green.blue()) // 2,
+            )
             badge = QLabel("Installed")
             badge.setStyleSheet(
-                f"color:{theme.ACCENT};"
+                f"color:{badge_color.name()};"
                 f"font-family:'{theme.UI_FONT}';font-size:8pt;"
                 f"font-weight:bold;"
                 f"background:transparent")
             title_row.addWidget(badge)
 
-        title_row.addStretch(1)
+        title_row.addStretch(0)
         col.addLayout(title_row)
 
         meta = QLabel(self.row_subtitle(hit))
         meta.setStyleSheet(
             f"color:{theme.GRAY};font-size:9pt;"
             f"font-family:'{theme.UI_FONT}';background:transparent")
+        meta.setWordWrap(False)
         col.addWidget(meta)
 
         h.addLayout(col, 1)
@@ -434,6 +567,8 @@ class BrowseBase(QDialog):
         return row
 
     def _on_row_changed(self, row):
+        if self._deleted:
+            return
         if row < 0 or row >= len(self.results_data):
             return
         self._selected_row = row
@@ -441,7 +576,9 @@ class BrowseBase(QDialog):
         pid = hit.get("id") or hit.get("project_id")
 
         key = hit["title"].lower().replace(" ", "")
-        installed = key in self._installed_keys()
+        installed_keys = self._installed_keys()
+        installed = (key in installed_keys
+                     or key.replace("_", "") in installed_keys)
         if installed:
             self.install_btn.setEnabled(False)
             self.install_btn.setText("Already Installed")
@@ -450,16 +587,24 @@ class BrowseBase(QDialog):
             self.install_btn.setText("Install Selected")
 
         if pid:
-            self.icon_loader.request(pid)
+            try:
+                self.icon_loader.request(pid)
+            except RuntimeError:
+                return
 
         self.detail.open_for(hit)
         if pid and HW.enable_icon_cache and pid in _ICON_CACHE:
             self.detail.set_icon(_ICON_CACHE[pid])
 
         if pid:
-            self.gallery_loader.request(pid)
+            try:
+                self.gallery_loader.request(pid)
+            except RuntimeError:
+                return
 
     def _on_icon_ready(self, project_id, icon):
+        if self._deleted:
+            return
         row = self._rows.get(project_id)
         if row is not None and hasattr(row, "_icon"):
             pm = square_icon(icon, ICON_SIZE_ROW)
@@ -469,6 +614,8 @@ class BrowseBase(QDialog):
             self.detail.set_icon(icon)
 
     def _on_shot_ready(self, project_id, idx, pm):
+        if self._deleted:
+            return
         if self.detail.pid == project_id:
             self.detail.add_screenshot(idx, pm)
 
@@ -479,6 +626,8 @@ class BrowseBase(QDialog):
         return self.results_data[row]
 
     def install_selected(self):
+        if self._deleted:
+            return
         hit = self._selected_hit()
         if hit is None:
             QMessageBox.information(self, "Select", "Click a row first.")
@@ -496,61 +645,97 @@ class BrowseBase(QDialog):
         w.done.connect(
             lambda p: self._install_done(hit, p),
             Qt.ConnectionType.QueuedConnection)
-        self._w = w; w.start()
+        self._w = w
+        w.start()
 
     def _install(self, hit, progress, progress_end):
         picked = self.pick_download(hit)
         if not picked:
-            self._log("warn", "no compatible file"); return None
+            self._log("warn", "no compatible file")
+            return None
         url, filename = picked
         dest = self.profile.dir / self.FOLDER / filename
         dest.parent.mkdir(parents=True, exist_ok=True)
         with http.stream("GET", url) as resp:
             resp.raise_for_status()
             total = int(resp.headers.get("content-length", 0))
-            done = 0; b0 = 0; tl = time.time()
+            done = 0
+            b0 = 0
+            tl = time.time()
             with open(dest, "wb") as f:
                 for chunk in resp.iter_bytes(65536):
-                    f.write(chunk); done += len(chunk)
+                    f.write(chunk)
+                    done += len(chunk)
                     now = time.time()
                     if now - tl >= 0.2 or done == total:
                         spd = (done - b0) / (now - tl) if now > tl else 0
-                        progress(filename, done, total, "", self._speed(spd))
-                        tl = now; b0 = done
+                        progress(filename, done, total, "",
+                                 self._speed(spd))
+                        tl = now
+                        b0 = done
         progress_end()
         return str(dest)
 
     @staticmethod
     def _speed(bps):
-        if bps > 1024 * 1024: return f"{bps / 1024 / 1024:.1f} MB/s"
-        if bps > 1024: return f"{bps / 1024:.0f} KB/s"
+        if bps > 1024 * 1024:
+            return f"{bps / 1024 / 1024:.1f} MB/s"
+        if bps > 1024:
+            return f"{bps / 1024:.0f} KB/s"
         return f"{bps:.0f} B/s"
 
     def _install_done(self, hit, path):
+        if self._deleted:
+            return
         self.install_btn.setEnabled(True)
         if path:
             self._log("ok", f"installed → {Path(path).name}")
             pid = hit.get("id") or hit.get("project_id")
             if pid:
-                self.icon_loader.request(pid)
+                try:
+                    self.icon_loader.request(pid)
+                except RuntimeError:
+                    pass
+            self.results_data = []
+            self.install_finished.emit(path)
             self._last_query = ""
             self.search_now(silent=True)
         else:
             self._log("error", f"install failed: {hit['title']}")
 
     def closeEvent(self, event):
+        self._deleted = True
         w = getattr(self, "_w", None)
         if w and w.isRunning():
             try:
-                w.log.disconnect(); w.done.disconnect()
-                w.progress.disconnect(); w.progress_end.disconnect()
+                w.log.disconnect()
+                w.done.disconnect()
+                w.progress.disconnect()
+                w.progress_end.disconnect()
             except Exception:
                 pass
-            w.quit(); w.wait(1000)
+            w.quit()
+            w.wait(1000)
         if self._search_reply is not None:
             try:
                 self._search_reply.abort()
                 self._search_reply.deleteLater()
+            except Exception:
+                pass
+        for loader in (getattr(self, "icon_loader", None),
+                       getattr(self, "gallery_loader", None)):
+            if loader is None:
+                continue
+            try:
+                if hasattr(loader, "icon_ready"):
+                    loader.icon_ready.disconnect()
+                if hasattr(loader, "shot_ready"):
+                    loader.shot_ready.disconnect()
+            except Exception:
+                pass
+            try:
+                loader.setParent(None)
+                loader.deleteLater()
             except Exception:
                 pass
         super().closeEvent(event)

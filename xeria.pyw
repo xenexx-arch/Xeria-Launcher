@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
+import os
 import sys
 from pathlib import Path
+
+if sys.platform.startswith("linux") and not os.environ.get("QT_QPA_PLATFORM"):
+    session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
+    has_wayland = bool(os.environ.get("WAYLAND_DISPLAY")) or \
+        session_type == "wayland"
+    os.environ["QT_QPA_PLATFORM"] = "wayland;xcb" if has_wayland else "xcb"
 
 from PyQt6.QtCore import QCoreApplication, Qt
 QCoreApplication.setAttribute(
@@ -22,7 +29,7 @@ theme.apply_accent(_settings.get("accent", "Blue"))
 
 from ui.launcher import MainWindow
 from core.worker import _leaked_threads
-from integration import http as _http
+from integration import net as _http
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

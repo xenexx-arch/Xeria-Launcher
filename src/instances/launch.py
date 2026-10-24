@@ -10,7 +10,7 @@ from core import hardware
 from core.java import best_java
 from core.jvm import build_jvm_flags
 from instances.env import build_launch_env
-from integration import http
+from integration import net as http
 
 
 HW = hardware.get()
@@ -59,11 +59,13 @@ class LaunchMixin:
             self.launch_btn.setStyleSheet(
                 f"QPushButton{{background:{theme.RED};color:{theme.WHITE};"
                 f"border:none;padding:8px 20px;font-weight:bold;"
+                f"min-width:140px;"
                 f"font-family:\"{theme.UI_FONT}\"}}"
                 f"QPushButton:hover{{background:{theme.ACCENT2}}}")
         else:
             self.launch_btn.setText("Launch")
             self.launch_btn.setStyleSheet(s_btn_launch())
+        self.launch_btn.setMinimumWidth(140)
 
     def launch(self):
         if self._process and self._process.poll() is not None:

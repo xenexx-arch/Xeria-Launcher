@@ -18,6 +18,11 @@ DEFAULTS = {
     "account": {},
     "accounts": [],
     "active_account": 0,
+    # Auto-check schedule for modpack content, in seconds.
+    # 0 = never, 3600 = hourly, 86400 = daily,
+    # 604800 = weekly, 2592000 = monthly.
+    "auto_check_interval": 86400,
+    "auto_check_last_run": 0,
 }
 
 
@@ -31,7 +36,8 @@ class Settings:
                 pass
 
     def get(self, key, default=None):
-        return self._data.get(key, default if default is not None else DEFAULTS.get(key))
+        return self._data.get(
+            key, default if default is not None else DEFAULTS.get(key))
 
     def set(self, key, value):
         self._data[key] = value
@@ -39,15 +45,15 @@ class Settings:
     def save(self):
         SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         SETTINGS_FILE.write_text(json.dumps(self._data, indent=2))
-        
+
     def get_account(self):
         from core import auth
         return auth.Account(self.get("account", {}))
-        
+
     def set_account(self, acc):
         self.set("account", acc.to_dict())
         self.save()
-        
+
     def get_accounts(self):
         accs = self.get("accounts", None)
         if accs is None or not isinstance(accs, list) or len(accs) == 0:
@@ -92,15 +98,22 @@ class Settings:
 
 
 def detect_gpu():
-    if platform.system() == "Windows": return "unknown"
+    if platform.system() == "Windows":
+        return "unknown"
     import glob, os
-    if glob.glob("/proc/driver/nvidia/version"): return "nvidia"
-    if os.path.exists("/usr/bin/nvidia-smi"): return "nvidia"
+    if glob.glob("/proc/driver/nvidia/version"):
+        return "nvidia"
+    if os.path.exists("/usr/bin/nvidia-smi"):
+        return "nvidia"
     for v in glob.glob("/sys/class/drm/card*/device/vendor"):
         try:
             vid = open(v).read().strip()
-            if vid == "0x1002": return "amd"
-            if vid == "0x10de": return "nvidia"
-            if vid == "0x8086": return "intel"
-        except Exception: pass
+            if vid == "0x1002":
+                return "amd"
+            if vid == "0x10de":
+                return "nvidia"
+            if vid == "0x8086":
+                return "intel"
+        except Exception:
+            pass
     return "unknown"

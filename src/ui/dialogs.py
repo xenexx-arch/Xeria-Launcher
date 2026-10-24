@@ -1,9 +1,12 @@
-from PyQt6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
+from PyQt6.QtCore import (
+    Qt, QTimer, QPropertyAnimation, QEasingCurve, QEvent, QObject,
+)
 from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QPushButton, QComboBox,
     QCheckBox, QGridLayout, QTabWidget, QPlainTextEdit,
     QMessageBox, QInputDialog, QFileDialog, QFrame,
+    QGraphicsOpacityEffect,
 )
 from pathlib import Path
 from core import theme
@@ -16,13 +19,108 @@ from core.java import find_javas, best_java
 from core.paths import IS_WIN
 
 
+class _EscCloseFilter(QObject):
+    """Intercepts Esc inside a line edit so it clears the field first,
+    and only closes the dialog if the field was already empty."""
+    def __init__(self, dialog, field):
+        super().__init__(dialog)
+        self._dialog = dialog
+        self._field = field
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.KeyPress and \
+           event.key() == Qt.Key.Key_Escape:
+            try:
+                if self._field.text():
+                    self._field.clear()
+                else:
+                    self._dialog.reject()
+            except Exception:
+                pass
+            return True
+        return super().eventFilter(obj, event)
+
+
 def fade_in(dialog, duration=120):
-    dialog.setWindowOpacity(0.0)
-    a = QPropertyAnimation(dialog, b"windowOpacity", dialog)
-    a.setDuration(duration); a.setStartValue(0.0); a.setEndValue(1.0)
-    a.setEasingCurve(QEasingCurve.Type.OutCubic)
-    a.start()
-    dialog._fade_anim = a
+    effect = QGraphicsOpacityEffect(dialog)
+    effect.setOpacity(0.0)
+    dialog.setGraphicsEffect(effect)
+
+    anim = QPropertyAnimation(effect, b"opacity", dialog)
+    anim.setDuration(duration)
+    anim.setStartValue(0.0)
+    anim.setEndValue(1.0)
+    anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def _cleanup():
+        dialog.setGraphicsEffect(None)
+
+    anim.finished.connect(_cleanup)
+    anim.start()
+    dialog._fade_anim = anim
+
+
+class _ChoiceCard(QFrame):
+    def __init__(self, title, subtitle, accent, on_click, parent=None):
+        super().__init__(parent)
+        self._on_click = on_click
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(72)
+        self._accent = accent
+        self._base = theme.ACCENT if accent else theme.BG3
+        self._hover = theme.ACCENT2 if accent else theme.BORDER
+
+        fg_title = theme.on_accent() if accent else theme.FG
+        fg_sub = "#000000" if accent else theme.GRAY
+        border = "none" if accent else f"1px solid {theme.BORDER}"
+
+        self._normal_css = f"""
+            _ChoiceCard, QFrame {{
+                background: {self._base};
+                border: {border};
+                border-radius: 0;
+            }}
+        """
+        self._hover_css = f"""
+            _ChoiceCard, QFrame {{
+                background: {self._hover};
+                border: {border};
+                border-radius: 0;
+            }}
+        """
+        self.setStyleSheet(self._normal_css)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 10, 16, 10)
+        lay.setSpacing(2)
+
+        t = QLabel(title)
+        t.setStyleSheet(
+            f"background:transparent;border:none;color:{fg_title};"
+            f"font-size:12pt;font-weight:bold;"
+            f"font-family:'{theme.UI_FONT}'")
+        lay.addWidget(t)
+
+        s = QLabel(subtitle)
+        s.setStyleSheet(
+            f"background:transparent;border:none;color:{fg_sub};"
+            f"font-size:9pt;font-family:'{theme.UI_FONT}'")
+        s.setWordWrap(True)
+        lay.addWidget(s)
+
+    def enterEvent(self, event):
+        self.setStyleSheet(self._hover_css)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.setStyleSheet(self._normal_css)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            if callable(self._on_click):
+                self._on_click()
+        super().mousePressEvent(event)
 
 
 class ChooseInstallDialog(QDialog):
@@ -30,120 +128,53 @@ class ChooseInstallDialog(QDialog):
         super().__init__(parent)
         self.choice = None
         self.setWindowTitle("Add New")
-        self.resize(430, 330)
-        self.setStyleSheet(f"""QDialog{{background:{theme.BG};color:{theme.FG}}}
-            QLabel{{color:{theme.FG};font-family:"{theme.UI_FONT}"}}
-            QPushButton{{background:{theme.BG3};color:{theme.FG};
-                border:1px solid {theme.BORDER};border-radius:0;
-                padding:14px;font-family:"{theme.UI_FONT}";font-size:11pt;text-align:left}}
-            QPushButton:hover{{background:{theme.BORDER}}}""")
-        v = QVBoxLayout(self); v.setContentsMargins(20, 20, 20, 20)
-        v.setSpacing(10)
+        self.setFixedSize(480, 380)
+        self.setSizeGripEnabled(False)
+        self.setStyleSheet(
+            f"QDialog{{background:{theme.BG};color:{theme.FG}}}")
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(20, 20, 20, 20)
+        v.setSpacing(12)
+
         title = QLabel("Add New")
-        title.setStyleSheet(f"color:{theme.FG};font-size:15pt;font-weight:bold")
+        title.setStyleSheet(
+            f"background:transparent;color:{theme.FG};"
+            f"font-size:16pt;font-weight:bold;"
+            f"font-family:'{theme.UI_FONT}'")
         v.addWidget(title)
-        for label, sub, key, accent in [
-            ("Modrinth Modpack", "Search and install from catalog",
+
+        subtitle = QLabel("Choose what to create or install.")
+        subtitle.setStyleSheet(
+            f"background:transparent;color:{theme.GRAY};"
+            f"font-size:9pt;font-family:'{theme.UI_FONT}'")
+        v.addWidget(subtitle)
+
+        v.addSpacing(6)
+
+        for label, sub, key, accent in (
+            ("Modrinth Modpack",
+             "Search and install from the Modrinth catalog",
              "modrinth", True),
-            ("Blank Profile", "Pick a Minecraft version", "blank", False),
-            ("Modpacks (.xerpack, .zip, .mrpack)",
-             "Import from a local file", "local", False),
-        ]:
-            b = QPushButton(f"  {label}\n  {sub}")
-            if accent:
-                b.setStyleSheet(
-                    f"QPushButton{{background:{theme.ACCENT};"
-                    f"color:{theme.on_accent()};"
-                    f"border:none;border-radius:0;padding:14px;"
-                    f"font-family:{theme.UI_FONT};font-size:11pt;"
-                    f"text-align:left;font-weight:bold}}"
-                    f"QPushButton:hover{{background:{theme.ACCENT2}}}")
-            b.clicked.connect(lambda _, k=key: self._pick(k))
-            v.addWidget(b)
+            ("Blank Profile",
+             "Pick a Minecraft version and loader",
+             "blank", False),
+            ("Local file",
+             "Import a .mrpack, .zip or .xerpack pack",
+             "local", False),
+        ):
+            card = _ChoiceCard(
+                label, sub, accent,
+                on_click=lambda k=key: self._pick(k),
+                parent=self)
+            v.addWidget(card)
+
+        v.addStretch(1)
         fade_in(self)
 
     def _pick(self, c):
-        self.choice = c; self.accept()
-
-
-class ModpackSearchDialog(QDialog):
-    def __init__(self, parent, log_fn=None):
-        super().__init__(parent)
-        self.result = None
-        self.log_fn = log_fn or (lambda t, m: None)
-        self._req_id = 0; self._w = None; self.results_data = []
-        self.setWindowTitle("Search Modpacks")
-        self.resize(760, 520)
-        self.setStyleSheet(f"""QDialog{{background:{theme.BG};color:{theme.FG}}}
-            QLabel{{color:{theme.FG};font-family:"{theme.UI_FONT}"}}
-            QLineEdit{{background:{theme.BG2};color:{theme.FG};
-                border:1px solid {theme.BORDER};border-radius:0;padding:8px;
-                font-family:"{theme.UI_FONT}";font-size:10pt}}
-            QListWidget{{background:{theme.BG2};color:{theme.FG};
-                border:1px solid {theme.BORDER};padding:0;border-radius:0}}
-            QListWidget::item{{padding:8px}}
-            QListWidget::item:hover{{background:{theme.BG3}}}
-            QListWidget::item:selected{{background:{theme.ACCENT};color:{theme.on_accent()}}}
-            QPushButton{{background:{theme.BG3};color:{theme.FG};
-                border:1px solid {theme.BORDER};border-radius:0;
-                padding:8px 16px;font-family:"{theme.UI_FONT}"}}
-            QPushButton:hover{{background:{theme.BORDER}}}""")
-        v = QVBoxLayout(self); v.setContentsMargins(14, 14, 14, 14)
-        v.setSpacing(8)
-        head = QLabel("Search Modrinth modpacks")
-        head.setStyleSheet(f"color:{theme.FG};font-size:13pt;font-weight:bold")
-        v.addWidget(head)
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Type to search modpacks")
-        v.addWidget(self.search)
-        self.list = QListWidget()
-        self.list.itemDoubleClicked.connect(lambda _: self._choose())
-        v.addWidget(self.list, 1)
-        btns = QHBoxLayout(); btns.addStretch()
-        cancel = QPushButton("Cancel"); cancel.clicked.connect(self.reject)
-        btns.addWidget(cancel)
-        ok = QPushButton("Install")
-        ok.setStyleSheet(f"QPushButton{{background:{theme.ACCENT};"
-                         f"color:{theme.on_accent()};"
-                         f"border:none;border-radius:0;padding:8px 20px;"
-                         f"font-weight:bold}}"
-                         f"QPushButton:hover{{background:{theme.ACCENT2}}}")
-        ok.clicked.connect(self._choose); btns.addWidget(ok)
-        v.addLayout(btns)
-        self._debounce = QTimer(self)
-        self._debounce.setSingleShot(True); self._debounce.setInterval(800)
-        self._debounce.timeout.connect(self._do_search)
-        self.search.textChanged.connect(
-            lambda _: (self._debounce.stop(), self._debounce.start()))
-        self.search.returnPressed.connect(self._do_search)
-        QTimer.singleShot(200, self._do_search)
-        fade_in(self)
-
-    def _do_search(self):
-        from integration import modrinth
-        q = self.search.text().strip() or "fabulously optimized"
-        self._req_id += 1; rid = self._req_id
-        self.list.clear(); self.list.addItem("  Searching")
-        w = Worker(
-            lambda log, progress, progress_end: modrinth.search_modpacks(q))
-        w.done.connect(lambda r, r_=rid: self._apply(r, r_),
-                       Qt.ConnectionType.QueuedConnection)
-        w.log.connect(self.log_fn, Qt.ConnectionType.QueuedConnection)
-        self._w = w; w.start()
-
-    def _apply(self, hits, rid):
-        if rid != self._req_id: return
-        self.list.clear(); self.results_data = hits or []
-        for h in self.results_data:
-            self.list.addItem(QListWidgetItem(
-                f"  {h['title']}   ·  {h['author']}  ·  {h['dl']:,} DL\n"
-                f"      {h['desc'][:90]}"))
-        if self.results_data: self.list.setCurrentRow(0)
-
-    def _choose(self):
-        row = self.list.currentRow()
-        if row < 0 or row >= len(self.results_data): return
-        self.result = self.results_data[row]; self.accept()
+        self.choice = c
+        self.accept()
 
 
 class ProfileDialog(QDialog):
@@ -154,8 +185,8 @@ class ProfileDialog(QDialog):
         self.is_new = profile is None
         self.setWindowTitle(
             "New Instance" if self.is_new else f"Edit — {profile.name}")
-        self.resize(640, 600)
-        self.setMinimumSize(520, 460)
+        self.setFixedSize(700, 640)
+        self.setSizeGripEnabled(False)
         self.setStyleSheet(
             f"QDialog{{background:{theme.BG};color:{theme.FG}}}"
             f"QLabel{{background:{theme.BG};color:{theme.FG};"
@@ -164,18 +195,23 @@ class ProfileDialog(QDialog):
             f"QCheckBox{{background:{theme.BG};color:{theme.FG};"
             f"font-family:\"{theme.UI_FONT}\";font-size:10pt}}"
         )
-        v = QVBoxLayout(self); v.setContentsMargins(16, 16, 16, 16)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(16, 16, 16, 16)
         v.setSpacing(10)
-        self.tabs = QTabWidget(self); v.addWidget(self.tabs, 1)
+        self.tabs = QTabWidget(self)
+        v.addWidget(self.tabs, 1)
 
-        t1 = QWidget(); g1 = QGridLayout(t1)
-        g1.setContentsMargins(14, 14, 14, 14); g1.setSpacing(8)
+        t1 = QWidget()
+        g1 = QGridLayout(t1)
+        g1.setContentsMargins(14, 14, 14, 14)
+        g1.setSpacing(8)
         g1.addWidget(QLabel("Name"), 0, 0)
         self.name = QLineEdit(profile.name if profile else "My Instance")
         g1.addWidget(self.name, 0, 1)
         g1.addWidget(QLabel("Version"), 1, 0)
         self.ver = QComboBox()
-        ids = [x["id"] for x in releases]; self.ver.addItems(ids)
+        ids = [x["id"] for x in releases]
+        self.ver.addItems(ids)
         if profile and profile.version in ids:
             self.ver.setCurrentText(profile.version)
         g1.addWidget(self.ver, 1, 1)
@@ -204,18 +240,23 @@ class ProfileDialog(QDialog):
         g1.setRowStretch(4, 1)
         self.tabs.addTab(t1, "Basic")
 
-        t2 = QWidget(); g2 = QVBoxLayout(t2)
-        g2.setContentsMargins(14, 14, 14, 14); g2.setSpacing(8)
+        t2 = QWidget()
+        g2 = QVBoxLayout(t2)
+        g2.setContentsMargins(14, 14, 14, 14)
+        g2.setSpacing(8)
         row = QHBoxLayout()
         row.addWidget(QLabel("GC"))
         self.gc = QComboBox()
-        self.gc.addItem(f"Use global ({settings.get('gc', 'G1GC')})", "")
+        self.gc.addItem(
+            f"Use global ({settings.get('gc', 'G1GC')})", "")
         for g in ("G1GC", "ZGC", "Parallel", "Serial"):
             self.gc.addItem(f"Override: {g}", g)
         if profile and profile.override_gc:
             idx = self.gc.findData(profile.override_gc)
-            if idx >= 0: self.gc.setCurrentIndex(idx)
-        row.addWidget(self.gc); row.addStretch()
+            if idx >= 0:
+                self.gc.setCurrentIndex(idx)
+        row.addWidget(self.gc)
+        row.addStretch()
         g2.addLayout(row)
         g2.addWidget(QLabel("JVM flags"))
         self.jvm = QPlainTextEdit()
@@ -230,8 +271,10 @@ class ProfileDialog(QDialog):
         self._auto_str = auto
         self.tabs.addTab(t2, "JVM")
 
-        t3 = QWidget(); g3 = QVBoxLayout(t3)
-        g3.setContentsMargins(14, 14, 14, 14); g3.setSpacing(8)
+        t3 = QWidget()
+        g3 = QVBoxLayout(t3)
+        g3.setContentsMargins(14, 14, 14, 14)
+        g3.setSpacing(8)
         g3.addWidget(QLabel("Environment variables (overrides global)"))
         self.env = QPlainTextEdit()
         self.env.setPlaceholderText("MANGOHUD=1")
@@ -239,11 +282,14 @@ class ProfileDialog(QDialog):
         g3.addWidget(self.env, 1)
         self.tabs.addTab(t3, "Environment")
 
-        t4 = QWidget(); g4 = QGridLayout(t4)
-        g4.setContentsMargins(14, 14, 14, 14); g4.setSpacing(8)
+        t4 = QWidget()
+        g4 = QGridLayout(t4)
+        g4.setContentsMargins(14, 14, 14, 14)
+        g4.setSpacing(8)
         g4.addWidget(QLabel("Java"), 0, 0)
         jrow = QHBoxLayout()
-        self.java_path = QLineEdit(profile.override_java_path if profile else "")
+        self.java_path = QLineEdit(
+            profile.override_java_path if profile else "")
         try:
             resolved = best_java(
                 "1.20.1", log=None,
@@ -255,15 +301,22 @@ class ProfileDialog(QDialog):
         jrow.addWidget(self.java_path, 1)
         find_btn = QPushButton("Auto")
         find_btn.setToolTip("Auto-detect")
+        find_btn.setAutoDefault(False)
+        find_btn.setDefault(False)
         find_btn.setStyleSheet(s_btn(theme.BG2, theme.FG, theme.BG3))
-        find_btn.clicked.connect(self._find_java); jrow.addWidget(find_btn)
+        find_btn.clicked.connect(self._find_java)
+        jrow.addWidget(find_btn)
         browse_btn = QPushButton("Browse")
+        browse_btn.setAutoDefault(False)
+        browse_btn.setDefault(False)
         browse_btn.setStyleSheet(s_btn(theme.BG2, theme.FG, theme.BG3))
-        browse_btn.clicked.connect(self._browse_java); jrow.addWidget(browse_btn)
+        browse_btn.clicked.connect(self._browse_java)
+        jrow.addWidget(browse_btn)
         g4.addLayout(jrow, 0, 1)
 
         g4.addWidget(QLabel("Wrapper"), 1, 0)
-        self.wrapper = QLineEdit(profile.override_wrapper if profile else "")
+        self.wrapper = QLineEdit(
+            profile.override_wrapper if profile else "")
         self.wrapper.setPlaceholderText("mangohud --dlsym")
         g4.addWidget(self.wrapper, 1, 1)
 
@@ -282,7 +335,8 @@ class ProfileDialog(QDialog):
         self.nvidia = QCheckBox(
             "Apply NVIDIA threaded-optimizations fix")
         self.nvidia.setChecked(
-            getattr(profile, "override_nvidia_fix", False) if profile else False)
+            getattr(profile, "override_nvidia_fix", False)
+            if profile else False)
         self.nvidia.setEnabled(has_sodium)
         if has_sodium:
             self.nvidia.setToolTip(
@@ -308,15 +362,23 @@ class ProfileDialog(QDialog):
         g4.setRowStretch(4, 1)
         self.tabs.addTab(t4, "Advanced")
 
-        btns = QHBoxLayout(); btns.addStretch()
+        btns = QHBoxLayout()
+        btns.addStretch()
         c = QPushButton("Cancel")
+        c.setAutoDefault(False)
+        c.setDefault(False)
         c.setStyleSheet(s_btn(theme.BG2, theme.FG, theme.BG3))
-        c.clicked.connect(self.reject); btns.addWidget(c)
+        c.clicked.connect(self.reject)
+        btns.addWidget(c)
         ok = QPushButton("Create" if self.is_new else "Save")
+        ok.setAutoDefault(False)
+        ok.setDefault(False)
         ok.setStyleSheet(s_btn_accent())
-        ok.clicked.connect(self.accept); btns.addWidget(ok)
+        ok.clicked.connect(self.accept)
+        btns.addWidget(ok)
         v.addLayout(btns)
-        self.name.selectAll(); self.name.setFocus()
+        self.name.selectAll()
+        self.name.setFocus()
         fade_in(self)
 
     def _refresh_jvm(self):
@@ -324,7 +386,8 @@ class ProfileDialog(QDialog):
             str(int(self.ram.currentData())),
             self.gc.currentData() or self.settings.get("gc", "G1GC")))
         current = self.jvm.toPlainText()
-        if getattr(self, "_auto_str", "") and current.startswith(self._auto_str):
+        if getattr(self, "_auto_str", "") and current.startswith(
+                self._auto_str):
             user_part = current[len(self._auto_str):].strip()
             self.jvm.setPlainText((auto + " " + user_part).strip())
         self._auto_str = auto
@@ -332,13 +395,14 @@ class ProfileDialog(QDialog):
     def _find_java(self):
         javas = find_javas()
         if not javas:
-            QMessageBox.information(self, "No Java",
-                                    "No Java installations detected.")
+            QMessageBox.information(
+                self, "No Java",
+                "No Java installations detected.")
             return
         items = [f"{label}  —  {path}" for path, (label, _) in javas]
-        choice, ok = QInputDialog.getItem(self, "Select Java",
-                                          "Detected Java installations:",
-                                          items, 0, False)
+        choice, ok = QInputDialog.getItem(
+            self, "Select Java", "Detected Java installations:",
+            items, 0, False)
         if ok and choice:
             idx = items.index(choice)
             self.java_path.setText(javas[idx][0])
@@ -347,7 +411,8 @@ class ProfileDialog(QDialog):
         path, _ = QFileDialog.getOpenFileName(
             self, "Select java executable", str(Path.home()),
             "Java (java)" if not IS_WIN else "Java (*.exe)")
-        if path: self.java_path.setText(path)
+        if path:
+            self.java_path.setText(path)
 
     def apply(self, profile):
         profile.version = self.ver.currentText()
@@ -362,4 +427,9 @@ class ProfileDialog(QDialog):
 
     def values(self):
         return (self.name.text().strip(), self.ver.currentText(),
-                str(int(self.ram.currentData())), self.loader.currentData())
+                str(int(self.ram.currentData())),
+                self.loader.currentData())
+
+
+# ---- Re-export for callers that do `from ui.dialogs import ModpackSearchDialog`
+from browse.modpacks import ModpackSearchDialog  # noqa: E402,F401

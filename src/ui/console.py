@@ -19,6 +19,7 @@ class Console(QPlainTextEdit):
         self.setMaximumBlockCount(3000)
         self._last_progress = False
         self._t0 = time.time()
+        self._last_line = None
 
     def restyle(self):
         self.setStyleSheet(
@@ -40,6 +41,13 @@ class Console(QPlainTextEdit):
             self._progress(label, cur, total, extra, speed); return
         if tag == "progress_end":
             self._last_progress = False; return
+
+        # Collapse identical consecutive lines ("installed X" twice, etc.)
+        key = (tag, str(msg))
+        if key == self._last_line:
+            return
+        self._last_line = key
+
         t, _ = self.TAGS.get(tag, self.TAGS["info"])
         ts = datetime.now().strftime("%H:%M:%S")
         rel = f"{time.time()-self._t0:.2f}s"
@@ -92,6 +100,7 @@ class MiniConsole(QPlainTextEdit):
         self.setFont(QFont(theme.MONO_FONT, 8))
         self.restyle()
         self.setMaximumBlockCount(400)
+        self._last_line = None
 
     def restyle(self):
         self.setStyleSheet(
@@ -108,6 +117,10 @@ class MiniConsole(QPlainTextEdit):
         elif tag == "progress_end":
             return
         else:
+            key = (tag, str(msg))
+            if key == self._last_line:
+                return
+            self._last_line = key
             t, _ = self.TAGS.get(tag, self.TAGS["info"])
             ts = datetime.now().strftime("%H:%M:%S")
             self.appendPlainText(f"[{ts}] {t} {msg}")

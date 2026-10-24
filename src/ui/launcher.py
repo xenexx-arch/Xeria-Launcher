@@ -1,4 +1,4 @@
-import os, sys, json, subprocess, platform
+import os, sys, json, subprocess, platform, time
 from pathlib import Path
 
 from PyQt6.QtCore import (
@@ -41,7 +41,7 @@ from ui.account import AccountView
 from browse.mods import ModsDialog
 from browse.resourcepacks import ResourcePacksDialog
 from browse.shaderpacks import ShadersDialog
-from integration import http
+from integration import net as http
 
 
 BROWSE_BY_KIND = {
@@ -126,8 +126,8 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
         self.settings = Settings()
         self.account = self.settings.get_account()
         self.setWindowTitle("Xeria Launcher")
-        self.resize(1000, 660)
-        self.setMinimumSize(820, 520)
+        self.resize(1180, 740)
+        self.setMinimumSize(960, 600)
         self.setStyleSheet(
             f"QMainWindow,QWidget{{background:{theme.BG};color:{theme.FG}}}")
         self.manifest, self.releases, self.profiles = None, [], []
@@ -140,12 +140,19 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
         self._build_ui()
         self.mc_log.connect(self._on_mc_log,
                             Qt.ConnectionType.QueuedConnection)
+
+        self._auto_check_timer = QTimer(self)
+        self._auto_check_timer.setSingleShot(True)
+        self._auto_check_timer.timeout.connect(self._run_auto_check)
+
         QTimer.singleShot(100, self._startup)
 
     def _on_mc_log(self, line):
         if line == "__exit__":
-            self._set_launch_state(False); return
-        if line: self.console.log("mc", line)
+            self._set_launch_state(False)
+            return
+        if line:
+            self.console.log("mc", line)
 
     def _set_account(self, acc):
         self.account = acc
@@ -159,24 +166,29 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
         return t.ACCENT
 
     def _build_ui(self):
-        central = QWidget(); self.setCentralWidget(central)
+        central = QWidget()
+        self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(10, 8, 10, 8); root.setSpacing(8)
+        root.setContentsMargins(10, 8, 10, 8)
+        root.setSpacing(8)
 
         h = QHBoxLayout()
         self.title_lbl = QLabel("Xeria")
         self.title_lbl.setStyleSheet(
             f"background:transparent;color:{self._title_color(theme)};"
             f"font-size:15pt;font-weight:bold")
-        h.addWidget(self.title_lbl); h.addStretch()
+        h.addWidget(self.title_lbl)
+        h.addStretch()
 
         self.account_btn = QPushButton("Account")
         self.account_btn.setStyleSheet(s_btn(theme.BG2, theme.FG, theme.BG3))
+        self.account_btn.setMinimumWidth(90)
         self.account_btn.clicked.connect(self.open_account_view)
         h.addWidget(self.account_btn)
 
         self.gear_btn = QPushButton("Menu")
         self.gear_btn.setStyleSheet(s_btn(theme.BG2, theme.FG, theme.BG3))
+        self.gear_btn.setMinimumWidth(90)
         self.gear_btn.clicked.connect(self.toggle_menu)
         h.addWidget(self.gear_btn)
         root.addLayout(h)
@@ -185,15 +197,21 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
         self.split.setChildrenCollapsible(False)
         self.split.setHandleWidth(20)
         self.split.setStyleSheet("QSplitter::handle{background:transparent}")
+        self.split.setStretchFactor(0, 0)
+        self.split.setStretchFactor(1, 1)
 
         self.left = QFrame()
-        self.left.setMinimumWidth(0); self.left.setMaximumWidth(340)
+        self.left.setMinimumWidth(220)
+        self.left.setMaximumWidth(340)
+        self.left.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                QSizePolicy.Policy.Expanding)
         self.left.setStyleSheet(f"QFrame{{background:{theme.BG2}}}")
         ll = QVBoxLayout(self.left)
-        ll.setContentsMargins(14, 12, 14, 12); ll.setSpacing(6)
+        ll.setContentsMargins(14, 12, 14, 12)
+        ll.setSpacing(6)
 
         bar = QHBoxLayout()
-        bar.setSpacing(4)
+        bar.setSpacing(8)
         lbl_col = QVBoxLayout()
         lbl_col.setSpacing(2)
         self.instances_lbl = QLabel("Instances")
@@ -206,11 +224,17 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
             f"background:transparent;color:{theme.GRAY};font-size:10pt")
         lbl_col.addWidget(self.instances_sub)
         bar.addLayout(lbl_col, 1)
+
         self.add_btn = QPushButton("+")
         self.add_btn.setToolTip("New instance")
         self.add_btn.setStyleSheet(s_plus_btn())
+        self.add_btn.setFixedSize(36, 36)
+        self.add_btn.setSizePolicy(QSizePolicy.Policy.Fixed,
+                                   QSizePolicy.Policy.Fixed)
         self.add_btn.clicked.connect(self.add_new)
-        bar.addWidget(self.add_btn)
+        bar.addWidget(self.add_btn, 0,
+                      Qt.AlignmentFlag.AlignVCenter |
+                      Qt.AlignmentFlag.AlignRight)
         ll.addLayout(bar)
 
         self.plist = QListWidget()
@@ -246,38 +270,52 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
         self.inst_view = QWidget()
         self.inst_view.setStyleSheet(f"QWidget{{background:{theme.BG}}}")
         il = QVBoxLayout(self.inst_view)
-        il.setContentsMargins(0, 0, 0, 0); il.setSpacing(20)
+        il.setContentsMargins(0, 0, 0, 0)
+        il.setSpacing(20)
 
         self.card = QFrame()
         self.card.setStyleSheet(f"QFrame{{background:{theme.BG2}}}")
         cl = QVBoxLayout(self.card)
-        cl.setContentsMargins(14, 12, 14, 12); cl.setSpacing(4)
+        cl.setContentsMargins(14, 12, 14, 12)
+        cl.setSpacing(4)
 
         top = QHBoxLayout()
-        info = QVBoxLayout(); info.setSpacing(2)
+        top.setSpacing(12)
+        info = QVBoxLayout()
+        info.setSpacing(2)
         self.card_title = QLabel("No instance selected")
         self.card_title.setStyleSheet(
             f"background:transparent;color:{theme.FG};"
             f"font-size:14pt;font-weight:bold")
+        self.card_title.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                      QSizePolicy.Policy.Preferred)
         info.addWidget(self.card_title)
         self.card_sub = QLabel('Click "+" to create an instance')
         self.card_sub.setStyleSheet(
             f"background:transparent;color:{theme.GRAY};font-size:10pt")
+        self.card_sub.setWordWrap(True)
+        self.card_sub.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                    QSizePolicy.Policy.Preferred)
         info.addWidget(self.card_sub)
         top.addLayout(info, 1)
 
         self.launch_btn = QPushButton("Launch")
+        self.launch_btn.setMinimumWidth(140)
+        self.launch_btn.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                      QSizePolicy.Policy.Fixed)
         self.launch_btn.setStyleSheet(s_btn_launch())
         self.launch_btn.clicked.connect(self.launch_toggle)
-        top.addWidget(self.launch_btn)
+        top.addWidget(self.launch_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         cl.addLayout(top)
         il.addWidget(self.card)
 
         self.console_frame = QFrame()
         self.console_frame.setStyleSheet(f"QFrame{{background:{theme.BG2}}}")
         cfl = QVBoxLayout(self.console_frame)
-        cfl.setContentsMargins(10, 10, 10, 10); cfl.setSpacing(0)
-        self.console = Console(); self.console.setMinimumHeight(200)
+        cfl.setContentsMargins(10, 10, 10, 10)
+        cfl.setSpacing(0)
+        self.console = Console()
+        self.console.setMinimumHeight(200)
         cfl.addWidget(self.console, 1)
         il.addWidget(self.console_frame, 1)
 
@@ -293,7 +331,7 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
         self.stack.addWidget(self.account_view)
 
         self.split.addWidget(self.stack)
-        self.split.setSizes([240, 760])
+        self.split.setSizes([260, 920])
         root.addWidget(self.split, 1)
 
     def toggle_menu(self):
@@ -379,6 +417,7 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
         pal.setColor(QPalette.ColorRole.HighlightedText, QColor(_theme.FG))
         self.plist.setPalette(pal)
         self.add_btn.setStyleSheet(s_plus_btn())
+        self.add_btn.setFixedSize(36, 36)
 
         self.inst_view.setStyleSheet(
             f"QWidget{{background:{_theme.BG}}}")
@@ -400,6 +439,7 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
         self.gear_btn.setStyleSheet(
             s_btn(_theme.BG2, _theme.FG, _theme.BG3))
         self.launch_btn.setStyleSheet(s_btn_launch())
+        self.launch_btn.setMinimumWidth(140)
 
         self.menu_view.tabs.setStyleSheet(s_tabs())
         if hasattr(self.menu_view, "restyle"):
@@ -409,7 +449,8 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
             self.account_view.restyle()
 
         self._update_card()
-        self.console.log("ok", f"theme={theme_name} accent={accent_name} applied")
+        self.console.log(
+            "ok", f"theme={theme_name} accent={accent_name} applied")
 
     def _track(self, w):
         self._workers.append(w)
@@ -428,6 +469,99 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
         self.fetch_manifest()
         self._warm_modrinth()
         fetch_all_loaders(self._apply_loader_icon)
+        self._schedule_auto_check()
+
+    def _schedule_auto_check(self):
+        try:
+            interval = int(self.settings.get("auto_check_interval", 86400))
+        except (TypeError, ValueError):
+            interval = 86400
+        if interval <= 0:
+            try:
+                self._auto_check_timer.stop()
+            except Exception:
+                pass
+            return
+        try:
+            last = float(self.settings.get("auto_check_last_run", 0))
+        except (TypeError, ValueError):
+            last = 0.0
+        now = time.time()
+        elapsed = now - last if last > 0 else interval
+        delay = max(0, int(interval - elapsed))
+        delay = max(delay, 30)
+        self._auto_check_timer.start(delay * 1000)
+
+    def _run_auto_check(self):
+        try:
+            self.settings.set("auto_check_last_run", time.time())
+            self.settings.save()
+        except Exception:
+            pass
+
+        profiles = list(self.profiles)
+        if not profiles:
+            self._schedule_auto_check()
+            return
+
+        self.console.log("sys", "auto-check: refreshing mods_meta")
+        for prof in profiles:
+            try:
+                mods_dir = prof.dir / "mods"
+                if not mods_dir.exists():
+                    continue
+                jars = [f for f in mods_dir.iterdir()
+                        if f.is_file() and f.suffix.lower() == ".jar"]
+                if not jars:
+                    continue
+                mv = prof.version
+                ld = (prof.loader or "vanilla").lower()
+                paths = [str(j) for j in jars]
+
+                def task(log, progress, progress_end,
+                         paths_=paths, mv_=mv, ld_=ld, prof_=prof):
+                    from integration import modrinth
+                    result = modrinth.resolve_mods_parallel(
+                        paths_, mv_, "mod", ld_, workers=3)
+                    try:
+                        meta = getattr(prof_, "mods_meta", {}) or {}
+                        meta.update(result)
+                        prof_.mods_meta = meta
+                        prof_.save()
+                    except Exception:
+                        pass
+                    return prof_, result
+
+                w = Worker(task)
+                w.log.connect(self.console.log,
+                              Qt.ConnectionType.QueuedConnection)
+                w.done.connect(
+                    self._on_auto_check_done,
+                    Qt.ConnectionType.QueuedConnection)
+                self._track(w)
+                w.start()
+            except Exception as e:
+                try:
+                    self.console.log(
+                        "warn",
+                        f"auto-check for {prof.name} failed: {e}")
+                except Exception:
+                    pass
+        self._schedule_auto_check()
+
+    def _on_auto_check_done(self, payload):
+        try:
+            if not payload:
+                return
+            prof, result = payload
+            hits = sum(1 for r in (result or {}).values()
+                       if r.get("project_id"))
+            total = len(result or {})
+            self.console.log(
+                "ok",
+                f"auto-check: {hits}/{total} resolved for '{prof.name}'")
+        except Exception:
+            pass
 
     def _warm_modrinth(self):
         if not hasattr(self, "_warm_nam"):
@@ -448,11 +582,15 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
 
     def _ctx_menu(self, pos):
         it = self.plist.itemAt(pos)
-        if not it: return
+        if not it:
+            return
         self.plist.setCurrentItem(it)
-        if not self.current_profile: return
-        m = QMenu(self); m.setStyleSheet(s_menu())
-        h = QAction(self.current_profile.name, m); h.setEnabled(False)
+        if not self.current_profile:
+            return
+        m = QMenu(self)
+        m.setStyleSheet(s_menu())
+        h = QAction(self.current_profile.name, m)
+        h.setEnabled(False)
         m.addAction(h)
         m.addSeparator()
         for label, kind in (("Mods", "mod"),
@@ -467,17 +605,23 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
                           ("Open Folder", self.open_folder),
                           ("Rename...", self.rename_profile),
                           ("Duplicate", self.duplicate_profile)):
-            a = QAction(label, m); a.triggered.connect(fn); m.addAction(a)
+            a = QAction(label, m)
+            a.triggered.connect(fn)
+            m.addAction(a)
         m.addSeparator()
         for label, fn in (("Import Instance...", self.import_instance),
                           ("Export as Modrinth pack (.mrpack)",
                            self.export_mrpack),
                           ("Backup Instance", self.backup_instance),
-                          ("Copy Launch Command", self.copy_launch_command),
+                          ("Copy Launch Command",
+                           self.copy_launch_command),
                           ("Open Logs Folder", self.open_logs)):
-            a = QAction(label, m); a.triggered.connect(fn); m.addAction(a)
+            a = QAction(label, m)
+            a.triggered.connect(fn)
+            m.addAction(a)
         m.addSeparator()
-        a = QAction("Delete", m); a.triggered.connect(self.delete_profile)
+        a = QAction("Delete", m)
+        a.triggered.connect(self.delete_profile)
         m.addAction(a)
         m.exec(self.plist.mapToGlobal(pos))
 
@@ -489,6 +633,10 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
 
     def closeEvent(self, event):
         _shutdown.set()
+        try:
+            self._auto_check_timer.stop()
+        except Exception:
+            pass
         p = self._process
         if p and p.poll() is None:
             try:
@@ -500,18 +648,25 @@ class MainWindow(LaunchMixin, ProfilesMixin, FetchMixin, QMainWindow):
                     p.terminate()
                 p.wait(2000)
             except Exception:
-                try: p.kill()
-                except Exception: pass
+                try:
+                    p.kill()
+                except Exception:
+                    pass
         for w in list(self._workers):
             try:
                 if w.isRunning():
                     try:
-                        w.log.disconnect(); w.done.disconnect()
-                        w.progress.disconnect(); w.progress_end.disconnect()
-                    except Exception: pass
+                        w.log.disconnect()
+                        w.done.disconnect()
+                        w.progress.disconnect()
+                        w.progress_end.disconnect()
+                    except Exception:
+                        pass
                     w.quit()
                     if not w.wait(3000):
-                        _leaked_threads.append(w); w.setParent(None)
-            except Exception: pass
+                        _leaked_threads.append(w)
+                        w.setParent(None)
+            except Exception:
+                pass
         http.close()
         event.accept()

@@ -29,14 +29,18 @@ class MenuView(QWidget):
 
     def _build_ui(self):
         v = QVBoxLayout(self)
-        v.setContentsMargins(0, 0, 0, 0); v.setSpacing(0)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
 
         self.tabs = QTabWidget(self)
         self.tabs.setStyleSheet(s_tabs())
         v.addWidget(self.tabs, 1)
 
-        gen = QWidget(); gg = QGridLayout(gen)
-        gg.setContentsMargins(14, 14, 14, 14); gg.setSpacing(8)
+        gen = QWidget()
+        gg = QGridLayout(gen)
+        gg.setContentsMargins(14, 14, 14, 14)
+        gg.setSpacing(8)
+
         gg.addWidget(QLabel("Theme"), 0, 0)
         self.theme_box = QComboBox()
         self.theme_box.addItems(["Dark", "Light"])
@@ -54,11 +58,30 @@ class MenuView(QWidget):
         self.accent_box.setCurrentText(self.settings.get("accent", "White"))
         gg.addWidget(self.accent_box, 1, 1)
 
-        gg.setRowStretch(2, 1)
+        gg.addWidget(QLabel("Check mods for updates"), 2, 0)
+        self.check_interval = QComboBox()
+        for label, secs in (
+            ("Never",   0),
+            ("Hourly",  3600),
+            ("Daily",   86400),
+            ("Weekly",  604800),
+            ("Monthly", 2592000),
+        ):
+            self.check_interval.addItem(label, secs)
+        current = int(self.settings.get("auto_check_interval", 86400))
+        idx = self.check_interval.findData(current)
+        if idx < 0:
+            idx = self.check_interval.findData(86400)
+        self.check_interval.setCurrentIndex(idx)
+        gg.addWidget(self.check_interval, 2, 1)
+
+        gg.setRowStretch(3, 1)
         self.tabs.addTab(gen, "General")
 
-        jv = QWidget(); gj = QGridLayout(jv)
-        gj.setContentsMargins(14, 14, 14, 14); gj.setSpacing(8)
+        jv = QWidget()
+        gj = QGridLayout(jv)
+        gj.setContentsMargins(14, 14, 14, 14)
+        gj.setSpacing(8)
 
         gj.addWidget(QLabel("Java"), 0, 0)
         jrow = QHBoxLayout()
@@ -75,10 +98,12 @@ class MenuView(QWidget):
         find_btn = QPushButton("Auto")
         find_btn.setToolTip("Auto-detect")
         find_btn.setStyleSheet(s_btn(theme.BG2, theme.FG, theme.BG3))
-        find_btn.clicked.connect(self._find_java); jrow.addWidget(find_btn)
+        find_btn.clicked.connect(self._find_java)
+        jrow.addWidget(find_btn)
         br_btn = QPushButton("Browse")
         br_btn.setStyleSheet(s_btn(theme.BG2, theme.FG, theme.BG3))
-        br_btn.clicked.connect(self._browse_java); jrow.addWidget(br_btn)
+        br_btn.clicked.connect(self._browse_java)
+        jrow.addWidget(br_btn)
         gj.addLayout(jrow, 0, 1)
 
         gj.addWidget(QLabel("Default JVM flags"), 1, 0)
@@ -90,11 +115,13 @@ class MenuView(QWidget):
         gj.setRowStretch(3, 1)
         self.tabs.addTab(jv, "JVM")
 
-        pf = QWidget(); gp = QGridLayout(pf)
-        gp.setContentsMargins(14, 14, 14, 14); gp.setSpacing(8)
+        pf = QWidget()
+        gp = QGridLayout(pf)
+        gp.setContentsMargins(14, 14, 14, 14)
+        gp.setSpacing(8)
         gp.addWidget(QLabel("Default GC"), 0, 0)
-        self.gc_box = QComboBox(); self.gc_box.addItems(
-            ["G1GC", "ZGC", "Parallel", "Serial"])
+        self.gc_box = QComboBox()
+        self.gc_box.addItems(["G1GC", "ZGC", "Parallel", "Serial"])
         self.gc_box.setCurrentText(self.settings.get("gc", "G1GC"))
         gp.addWidget(self.gc_box, 0, 1)
         gp.addWidget(QLabel("JVM flags"), 1, 0)
@@ -103,8 +130,10 @@ class MenuView(QWidget):
         gp.setRowStretch(3, 1)
         self.tabs.addTab(pf, "Performance")
 
-        ev = QWidget(); gv = QVBoxLayout(ev)
-        gv.setContentsMargins(14, 14, 14, 14); gv.setSpacing(8)
+        ev = QWidget()
+        gv = QVBoxLayout(ev)
+        gv.setContentsMargins(14, 14, 14, 14)
+        gv.setSpacing(8)
         gv.addWidget(QLabel("Environment overrides global"))
         self.env = QPlainTextEdit()
         self.env.setPlaceholderText("MANGOHUD=1")
@@ -112,8 +141,10 @@ class MenuView(QWidget):
         gv.addWidget(self.env, 1)
         self.tabs.addTab(ev, "Environment")
 
-        wp = QWidget(); gw = QGridLayout(wp)
-        gw.setContentsMargins(14, 14, 14, 14); gw.setSpacing(8)
+        wp = QWidget()
+        gw = QGridLayout(wp)
+        gw.setContentsMargins(14, 14, 14, 14)
+        gw.setSpacing(8)
         gw.addWidget(QLabel("Wrapper command"), 0, 0)
         self.wrapper = QLineEdit(self.settings.get("wrapper_command", ""))
         self.wrapper.setPlaceholderText("mangohud --dlsym")
@@ -121,8 +152,10 @@ class MenuView(QWidget):
         gw.setRowStretch(1, 1)
         self.tabs.addTab(wp, "Wrapper")
 
-        ab = QWidget(); ga = QVBoxLayout(ab)
-        ga.setContentsMargins(14, 14, 14, 14); ga.setSpacing(6)
+        ab = QWidget()
+        ga = QVBoxLayout(ab)
+        ga.setContentsMargins(14, 14, 14, 14)
+        ga.setSpacing(6)
         hw = hardware.get()
         for label, value in (
             ("Launcher", f"Xeria {APP_VERSION}"),
@@ -142,6 +175,7 @@ class MenuView(QWidget):
 
         self.theme_box.currentTextChanged.connect(self._save_all)
         self.accent_box.currentTextChanged.connect(self._save_all)
+        self.check_interval.currentIndexChanged.connect(self._save_all)
         self.java_path.textChanged.connect(self._save_all)
         self.default_flags.textChanged.connect(self._save_all)
         self.gc_box.currentTextChanged.connect(self._save_all)
@@ -155,7 +189,8 @@ class MenuView(QWidget):
         for w in self.findChildren(QPushButton):
             ss = w.styleSheet()
             if ss and "QPushButton" in ss:
-                w.setStyleSheet(s_btn(_theme.BG2, _theme.FG, _theme.BG3))
+                w.setStyleSheet(
+                    s_btn(_theme.BG2, _theme.FG, _theme.BG3))
         for w in self.findChildren(QComboBox):
             w.setStyleSheet(s_combo())
         for w in self.findChildren(QPlainTextEdit):
@@ -167,15 +202,20 @@ class MenuView(QWidget):
                 f"font-family:\"{_theme.UI_FONT}\";font-size:10pt}}")
 
     def _save_all(self, *a):
-        self.settings.set("theme", self.theme_box.currentText().lower())
+        self.settings.set("theme",
+                          self.theme_box.currentText().lower())
         self.settings.set("accent", self.accent_box.currentText())
+        self.settings.set(
+            "auto_check_interval",
+            int(self.check_interval.currentData() or 0))
         self.settings.set("java_path", self.java_path.text().strip())
         self.settings.set("default_jvm_flags",
                           self.default_flags.toPlainText().strip())
         self.settings.set("gc", self.gc_box.currentText())
         self.settings.set("jvm_flags", self.jvm.toPlainText().strip())
         self.settings.set("env_vars", self.env.toPlainText().strip())
-        self.settings.set("wrapper_command", self.wrapper.text().strip())
+        self.settings.set("wrapper_command",
+                          self.wrapper.text().strip())
         self.settings.save()
         self.theme_changed.emit(self.theme_box.currentText().lower(),
                                 self.accent_box.currentText())
@@ -198,4 +238,5 @@ class MenuView(QWidget):
         path, _ = QFileDialog.getOpenFileName(
             self, "Select Java executable", str(Path.home()),
             "Java (java)" if not IS_WIN else "Java (*.exe)")
-        if path: self.java_path.setText(path)
+        if path:
+            self.java_path.setText(path)

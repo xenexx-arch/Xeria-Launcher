@@ -1,7 +1,7 @@
 import os, json, zipfile, subprocess, platform, re
 from pathlib import Path
 from core.paths import MC_ROOT, NO_WINDOW
-from integration import http
+from integration import net as http
 
 FABRIC_META    = "https://meta.fabricmc.net/v2"
 QUILT_META     = "https://meta.quiltmc.org/v3"

@@ -1,0 +1,951 @@
+import hashlib
+import subprocess
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from PyQt6.QtCore import Qt, QSize, QUrl, QTimer
+from PyQt6.QtGui import QDesktopServices, QAction
+from PyQt6.QtNetwork import QNetworkAccessManager
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QListWidget, QListWidgetItem, QFrame, QMessageBox, QMenu,
+    QSizePolicy,
+)
+
+from core import theme
+from core.paths import IS_WIN, IS_MAC
+from core.worker import Worker, _leaked_threads
+from integration import modrinth, net as http
+from browse.common import (
+    ICON_SIZE_ROW, make_placeholder, square_icon, square_icon_pixmap,
+    IconLoader,
+)
+
+
+KIND_FOLDER = {
+    "mod":          "mods",
+    "resourcepack": "resourcepacks",
+    "shader":       "shaderpacks",
+}
+KIND_LABEL = {
+    "mod":          "mod",
+    "resourcepack": "resource pack",
+    "shader":       "shader pack",
+}
+KIND_PROJECT_TYPE = {
+    "mod":          "mod",
+    "resourcepack": "resourcepack",
+    "shader":       "shader",
+}
+
+
+DOWNLOAD_WORKERS = 12
+LOOKUP_WORKERS = 3
+
+
+class ControlTab(QWidget):
+    ROW_HEIGHT = 64
+
+    def __init__(self, parent, profile, log_fn, kind):
+        super().__init__(parent)
+        self.profile = profile
+        self.log_fn = log_fn
+        self.kind = kind
+        self.folder = KIND_FOLDER[kind]
+        self.label = KIND_LABEL[kind]
+
+        self._mods = {}
+        self._sync_running = False
+        self._active_workers = set()
+        self._rows = {}
+        self._pending_rerender = False
+        self._deleted = False
+        self._summary_lbl = None
+        self._resolve_worker = None
+
+        self._nam = QNetworkAccessManager(self)
+        self.icon_loader = IconLoader(self, nam=self._nam)
+        try:
+            self.icon_loader.icon_ready.connect(self._on_icon_ready)
+        except Exception:
+            pass
+
+        self._build_ui()
+        self._summary_lbl = self.summary
+        self.rescan()
+
+    # ---- Events ---------------------------------------------------------
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._cull_visible)
+        QTimer.singleShot(0, self._ensure_resolved)
+
+    def refresh_from_disk(self):
+        try:
+            if self._deleted:
+                return
+            self.rescan()
+            self._ensure_resolved()
+        except RuntimeError:
+            pass
+
+    # ---- Background resolve ---------------------------------------------
+
+    def _ensure_resolved(self):
+        try:
+            if self._deleted:
+                return
+            if self._resolve_worker is not None:
+                return
+            unresolved = []
+            for path, entry in self._mods.items():
+                if entry.get("status") in ("", None, "unchecked"):
+                    unresolved.append(path)
+            if not unresolved:
+                return
+
+            for path in unresolved:
+                entry = self._mods.get(path)
+                if entry is not None:
+                    entry["status"] = "checking"
+            self._rerender()
+            self._update_summary()
+
+            paths = list(unresolved)
+            mv = self.profile.version
+            ld = (self.profile.loader or "vanilla").lower()
+            kind = self.kind
+            profile = self.profile
+
+            def task(log, progress, progress_end):
+                from integration import modrinth as _m
+                result = _m.resolve_mods_parallel(
+                    paths, mv, kind,
+                    ld if kind == "mod" else None,
+                    workers=LOOKUP_WORKERS)
+                try:
+                    m = getattr(profile, "mods_meta", {}) or {}
+                    m.update(result)
+                    profile.mods_meta = m
+                    profile.save()
+                except Exception:
+                    pass
+                return result
+
+            w = Worker(task)
+            w.log.connect(self.log_fn,
+                          Qt.ConnectionType.QueuedConnection)
+            self._track(w, on_done=self._on_resolved)
+            self._resolve_worker = w
+            w.start()
+        except RuntimeError:
+            pass
+
+    def _on_resolved(self, result):
+        try:
+            if self._deleted:
+                return
+            self._resolve_worker = None
+            if isinstance(result, dict):
+                for path, entry in self._mods.items():
+                    r = result.get(entry["filename"])
+                    if not r:
+                        continue
+                    entry["project_id"] = r.get("project_id") or entry["project_id"]
+                    entry["title"] = r.get("title") or entry["title"]
+                    entry["author"] = r.get("author") or entry["author"]
+                    entry["current_ver"] = r.get("version_number") or entry["current_ver"]
+                    entry["latest_ver"] = r.get("latest_version") or entry["latest_ver"]
+                    entry["url"] = r.get("latest_url") or entry["url"]
+                    entry["target_name"] = r.get("latest_filename") or entry["target_name"]
+                    entry["status"] = r.get("status") or entry["status"]
+                    pid = entry.get("project_id")
+                    if pid and entry.get("icon_pixmap") is None:
+                        try:
+                            self.icon_loader.request(pid)
+                        except RuntimeError:
+                            pass
+            self._rerender()
+            self._update_summary()
+            QTimer.singleShot(0, self._ensure_resolved)
+        except RuntimeError:
+            pass
+
+    # ---- UI --------------------------------------------------------------
+
+    def _build_ui(self):
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+
+        top = QHBoxLayout()
+        top.setSpacing(6)
+
+        self.summary = QLabel("Scanning…")
+        self.summary.setStyleSheet(
+            f"color:{theme.GRAY};font-size:9pt;background:transparent")
+        self.summary.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                   QSizePolicy.Policy.Preferred)
+        top.addWidget(self.summary, 1)
+
+        self.sync_all_btn = QPushButton("Synchronize all")
+        self.sync_all_btn.setMinimumWidth(160)
+        self.sync_all_btn.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                        QSizePolicy.Policy.Fixed)
+        self.sync_all_btn.setAutoDefault(False)
+        self.sync_all_btn.setDefault(False)
+        self.sync_all_btn.setStyleSheet(
+            f"QPushButton{{background:{theme.ACCENT};"
+            f"color:{theme.on_accent()};border:none;"
+            f"padding:8px 20px;font-weight:bold;min-width:160px}}"
+            f"QPushButton:hover{{background:{theme.ACCENT2}}}"
+            f"QPushButton:disabled{{background:{theme.BG3};"
+            f"color:{theme.GRAY}}}")
+        self.sync_all_btn.clicked.connect(self.synchronize_all)
+        top.addWidget(self.sync_all_btn)
+
+        v.addLayout(top)
+
+        self.list = QListWidget()
+        self.list.setFrameShape(QFrame.Shape.NoFrame)
+        self.list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.list.setVerticalScrollMode(
+            QListWidget.ScrollMode.ScrollPerPixel)
+        self.list.setIconSize(QSize(ICON_SIZE_ROW, ICON_SIZE_ROW))
+        self.list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._on_ctx)
+        self.list.setStyleSheet(
+            f"QListWidget{{background:{theme.BG2};color:{theme.FG};"
+            f"border:none;padding:0;outline:0}}"
+            f"QListWidget::item{{padding:0;border:none}}"
+            f"QListWidget::item:selected{{background:{theme.BG3};"
+            f"border:none}}"
+            f"QScrollBar:vertical{{background:{theme.BG2};width:8px;"
+            f"margin:0}}"
+            f"QScrollBar::handle{{background:{theme.BG3};min-height:20px}}"
+            f"QScrollBar::add-line,QScrollBar::sub-line{{height:0}}"
+            f"QScrollBar::add-page,QScrollBar::sub-page{{background:transparent}}")
+        self.list.verticalScrollBar().valueChanged.connect(self._cull_visible)
+        v.addWidget(self.list, 1)
+
+    def restyle(self):
+        try:
+            if self._deleted:
+                return
+            self.summary.setStyleSheet(
+                f"color:{theme.GRAY};font-size:9pt;background:transparent")
+            self.sync_all_btn.setStyleSheet(
+                f"QPushButton{{background:{theme.ACCENT};"
+                f"color:{theme.on_accent()};border:none;"
+                f"padding:8px 20px;font-weight:bold;min-width:160px}}"
+                f"QPushButton:hover{{background:{theme.ACCENT2}}}"
+                f"QPushButton:disabled{{background:{theme.BG3};"
+                f"color:{theme.GRAY}}}")
+            self._rerender()
+        except RuntimeError:
+            pass
+
+    # ---- Worker tracking -------------------------------------------------
+
+    def _track(self, w, on_done=None):
+        try:
+            self._active_workers.add(w)
+            if on_done is not None:
+                w.done.connect(on_done, Qt.ConnectionType.QueuedConnection)
+            w.finished.connect(lambda: self._active_workers.discard(w))
+        except RuntimeError:
+            pass
+
+    def shutdown(self):
+        try:
+            if self._deleted:
+                return
+            self._deleted = True
+            try:
+                self.icon_loader.icon_ready.disconnect()
+            except Exception:
+                pass
+            try:
+                self.icon_loader.setParent(None)
+                self.icon_loader.deleteLater()
+            except Exception:
+                pass
+            self._pending_rerender = False
+            for w in list(self._active_workers):
+                try:
+                    try:
+                        w.log.disconnect()
+                        w.done.disconnect()
+                        w.progress.disconnect()
+                        w.progress_end.disconnect()
+                    except Exception:
+                        pass
+                    w.quit()
+                    if not w.wait(200):
+                        _leaked_threads.append(w)
+                except Exception:
+                    pass
+            self._active_workers.clear()
+            self._sync_running = False
+        except RuntimeError:
+            pass
+
+    def closeEvent(self, event):
+        try:
+            self.shutdown()
+        except Exception:
+            pass
+        super().closeEvent(event)
+
+    # ---- Local scan ------------------------------------------------------
+
+    def rescan(self):
+        try:
+            if self._deleted:
+                return
+            prev_icons = {
+                p: e.get("icon_pixmap")
+                for p, e in self._mods.items()
+                if e.get("icon_pixmap") is not None
+            }
+            meta = getattr(self.profile, "mods_meta", {}) or {}
+            self._mods = {}
+            self._rows.clear()
+            mods_dir = self.profile.dir / self.folder
+            mods_dir.mkdir(parents=True, exist_ok=True)
+            files = sorted(
+                [f for f in mods_dir.iterdir()
+                 if f.is_file() and f.suffix.lower() in (".jar", ".zip")],
+                key=lambda f: f.name.lower())
+            for f in files:
+                key = str(f)
+                m = meta.get(f.name, {}) or {}
+                entry = {
+                    "filename": f.name,
+                    "project_id": m.get("project_id"),
+                    "title": m.get("title") or f.stem,
+                    "author": m.get("author", ""),
+                    "current_ver": m.get("version_number", ""),
+                    "latest_ver": m.get("latest_version", ""),
+                    "url": m.get("latest_url", ""),
+                    "target_name": m.get("latest_filename", f.name),
+                    "status": m.get("status", "unchecked"),
+                    "busy": False,
+                    "icon_pixmap": prev_icons.get(key),
+                }
+                self._mods[key] = entry
+            self._rerender()
+            self._update_summary()
+            for entry in self._mods.values():
+                pid = entry.get("project_id")
+                if pid and entry.get("icon_pixmap") is None:
+                    try:
+                        self.icon_loader.request(pid)
+                    except RuntimeError:
+                        break
+        except RuntimeError:
+            pass
+
+    # ---- Sync ------------------------------------------------------------
+
+    def synchronize_all(self):
+        try:
+            if self._deleted:
+                return
+            entries = [(p, m) for p, m in self._mods.items()
+                       if not m["busy"]]
+            if not entries:
+                QMessageBox.information(
+                    self, "Nothing to do",
+                    f"No {self.label}s found.")
+                return
+            if QMessageBox.question(
+                    self, f"Synchronize {self.label}s",
+                    f"Check {len(entries)} {self.label}(s) against Modrinth "
+                    f"and download the latest compatible versions for "
+                    f"Minecraft {self.profile.version}?\n\n"
+                    f"Files with no update will be left untouched. "
+                    f"Outdated files will be replaced."
+            ) != QMessageBox.StandardButton.Yes:
+                return
+
+            self._sync_running = True
+            for _, entry in entries:
+                entry["busy"] = True
+                if entry["status"] == "unchecked":
+                    entry["status"] = "checking"
+            self._rerender()
+            self._update_summary()
+
+            w = Worker(self._sync_all_task, entries)
+            w.log.connect(self.log_fn, Qt.ConnectionType.QueuedConnection)
+            w.progress.connect(
+                lambda *a: self._on_sync_progress(*a),
+                Qt.ConnectionType.QueuedConnection)
+            w.progress_end.connect(
+                lambda: None, Qt.ConnectionType.QueuedConnection)
+            self._track(w, on_done=self._sync_all_done)
+            w.start()
+        except RuntimeError:
+            pass
+
+    def _on_sync_progress(self, label, cur, total, extra, speed):
+        try:
+            if self._deleted:
+                return
+            msg = f"{label} {cur}/{total}"
+            if extra:
+                msg += f"  ·  {extra}"
+            self.summary.setText(msg)
+        except RuntimeError:
+            pass
+
+    def _sync_all_task(self, entries, log, progress, progress_end):
+        mods_dir = self.profile.dir / self.folder
+        loader = (self.profile.loader or "vanilla").lower()
+        mc_version = self.profile.version
+        kind = self.kind
+
+        need_resolve = []
+        for path, entry in entries:
+            if not entry.get("url") or not entry.get("project_id"):
+                need_resolve.append((path, entry))
+
+        if need_resolve:
+            progress("resolving", 0, len(need_resolve), "", "")
+            paths_only = [p for p, _ in need_resolve]
+            try:
+                from integration import modrinth as _m
+                meta = _m.resolve_mods_parallel(
+                    paths_only, mc_version, kind,
+                    loader if kind == "mod" else None,
+                    workers=LOOKUP_WORKERS)
+                for path, entry in need_resolve:
+                    r = meta.get(entry["filename"])
+                    if not r:
+                        entry["status"] = "error"
+                        continue
+                    entry["project_id"] = r.get("project_id") or entry["project_id"]
+                    entry["title"] = r.get("title") or entry["title"]
+                    entry["author"] = r.get("author") or entry["author"]
+                    entry["current_ver"] = r.get("version_number") or entry["current_ver"]
+                    entry["latest_ver"] = r.get("latest_version") or entry["latest_ver"]
+                    entry["url"] = r.get("latest_url") or entry["url"]
+                    entry["target_name"] = r.get("latest_filename") or entry["target_name"]
+                    entry["status"] = r.get("status") or entry["status"]
+            except Exception as e:
+                log("error", f"resolve failed: {e}")
+            progress_end()
+
+        to_download = []
+        for path, entry in entries:
+            if not entry.get("url") or not entry.get("target_name"):
+                entry["busy"] = False
+                continue
+            if entry["current_ver"] == entry["latest_ver"] and entry["current_ver"]:
+                entry["status"] = "up-to-date"
+                entry["busy"] = False
+                continue
+            to_download.append((path, entry))
+
+        total = len(to_download)
+        if not total:
+            progress_end()
+            return 0
+
+        progress("syncing", 0, total, "", "")
+        synced = 0
+        done_count = 0
+
+        def one_download(item):
+            path, entry = item
+            old = Path(path)
+            target = mods_dir / entry["target_name"]
+            tmp = target.with_suffix(target.suffix + ".part")
+            log("info",
+                f"{entry['title']} → {entry['target_name']} "
+                f"({entry['latest_ver']})")
+            try:
+                with http.stream("GET", entry["url"]) as r:
+                    r.raise_for_status()
+                    with open(tmp, "wb") as f:
+                        for chunk in r.iter_bytes(65536):
+                            f.write(chunk)
+                if old.exists() and old.resolve() != target.resolve():
+                    try:
+                        old.unlink()
+                    except Exception as e:
+                        log("warn", f"could not remove old file: {e}")
+                tmp.replace(target)
+                entry["status"] = "up-to-date"
+                entry["current_ver"] = entry["latest_ver"]
+                entry["filename"] = target.name
+                entry["busy"] = False
+                return True, entry
+            except Exception as e:
+                log("error", f"failed {entry['title']}: {e}")
+                entry["status"] = "error"
+                entry["busy"] = False
+                try:
+                    if tmp.exists():
+                        tmp.unlink()
+                except Exception:
+                    pass
+                return False, entry
+
+        with ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS) as ex:
+            futures = [ex.submit(one_download, it) for it in to_download]
+            for fut in as_completed(futures):
+                ok, entry = fut.result()
+                if ok:
+                    synced += 1
+                done_count += 1
+                progress("syncing", done_count, total, entry["filename"], "")
+
+        progress_end()
+        return synced
+
+    def _sync_all_done(self, synced):
+        try:
+            if self._deleted:
+                return
+            self._sync_running = False
+            self._rerender()
+            if synced is not None:
+                self.log_fn("ok", f"synchronized {synced} {self.label}(s)")
+            for entry in self._mods.values():
+                pid = entry.get("project_id")
+                if pid and entry.get("icon_pixmap") is None:
+                    try:
+                        self.icon_loader.request(pid)
+                    except RuntimeError:
+                        break
+            self._persist_meta()
+            self._update_summary()
+        except RuntimeError:
+            pass
+
+    def _persist_meta(self):
+        try:
+            meta = {}
+            for entry in self._mods.values():
+                meta[entry["filename"]] = {
+                    "project_id": entry.get("project_id"),
+                    "title": entry.get("title", ""),
+                    "author": entry.get("author", ""),
+                    "version_number": entry.get("current_ver", ""),
+                    "latest_version": entry.get("latest_ver", ""),
+                    "latest_filename": entry.get("target_name", ""),
+                    "latest_url": entry.get("url", ""),
+                    "status": entry.get("status", "unchecked"),
+                }
+            self.profile.mods_meta = meta
+            self.profile.save()
+        except Exception:
+            pass
+
+    # ---- Single-row sync (context menu, multi-select aware) --------------
+
+    def _sync_selected(self):
+        try:
+            if self._deleted or self._sync_running:
+                return
+            items = self.list.selectedItems()
+            if not items:
+                return
+            paths = self._sorted_paths()
+            chosen = []
+            for it in items:
+                idx = self.list.row(it)
+                if 0 <= idx < len(paths):
+                    path = paths[idx]
+                    entry = self._mods.get(path)
+                    if entry and not entry["busy"]:
+                        entry["busy"] = True
+                        chosen.append((path, entry))
+            if not chosen:
+                return
+            self._sync_running = True
+            self._rerender()
+            self._update_summary()
+
+            w = Worker(self._sync_all_task, chosen)
+            w.log.connect(self.log_fn, Qt.ConnectionType.QueuedConnection)
+            w.progress.connect(
+                lambda *a: self._on_sync_progress(*a),
+                Qt.ConnectionType.QueuedConnection)
+            w.progress_end.connect(
+                lambda: None, Qt.ConnectionType.QueuedConnection)
+            self._track(w, on_done=self._sync_all_done)
+            w.start()
+        except RuntimeError:
+            pass
+
+    # ---- Delete (multi-select aware) -------------------------------------
+
+    def _delete_selected(self):
+        try:
+            if self._deleted:
+                return
+            items = self.list.selectedItems()
+            if not items:
+                return
+            paths = self._sorted_paths()
+            targets = []
+            for it in items:
+                idx = self.list.row(it)
+                if 0 <= idx < len(paths):
+                    targets.append(paths[idx])
+            if not targets:
+                return
+            if len(targets) == 1:
+                entry = self._mods.get(targets[0])
+                label = entry["title"] if entry else "?"
+                msg = f"Delete '{label}' from this instance?\n\nThis cannot be undone."
+            else:
+                msg = (f"Delete {len(targets)} {self.label}(s) "
+                       f"from this instance?\n\nThis cannot be undone.")
+            if QMessageBox.question(
+                    self, f"Delete {self.label}",
+                    msg) != QMessageBox.StandardButton.Yes:
+                return
+            for path in targets:
+                entry = self._mods.get(path)
+                try:
+                    Path(path).unlink()
+                    if entry:
+                        self.log_fn("warn", f"deleted {entry['title']}")
+                except Exception as e:
+                    self.log_fn("error", f"delete failed: {e}")
+                    continue
+                try:
+                    if entry:
+                        self.profile.mods_meta.pop(entry["filename"], None)
+                except Exception:
+                    pass
+                del self._mods[path]
+            try:
+                self.profile.save()
+            except Exception:
+                pass
+            self._rerender()
+            self._update_summary()
+        except RuntimeError:
+            pass
+
+    # ---- Context menu ----------------------------------------------------
+
+    def _on_ctx(self, pos):
+        try:
+            if self._deleted:
+                return
+            item = self.list.itemAt(pos)
+            if item is None:
+                return
+            # If clicking outside current selection, replace it.
+            if not item.isSelected():
+                self.list.clearSelection()
+                item.setSelected(True)
+            self.list.setCurrentItem(item)
+
+            paths = self._sorted_paths()
+            sel_count = len(self.list.selectedItems())
+            # Show the primary row's title in the header.
+            row = self.list.row(item)
+            primary_path = paths[row] if 0 <= row < len(paths) else None
+            primary = self._mods.get(primary_path) if primary_path else None
+
+            m = QMenu(self)
+            m.setStyleSheet(
+                f"QMenu{{background:{theme.BG2};color:{theme.FG};"
+                f"border:none;padding:4px}}"
+                f"QMenu::item{{padding:6px 20px 6px 12px}}"
+                f"QMenu::item:selected{{background:{theme.BG3};"
+                f"color:{theme.FG}}}"
+                f"QMenu::item:disabled{{color:{theme.GRAY}}}"
+                f"QMenu::separator{{height:1px;background:{theme.BORDER};"
+                f"margin:4px 0}}")
+
+            if primary:
+                header_text = (primary["title"] if sel_count == 1
+                               else f"{sel_count} {self.label}s selected")
+                a = m.addAction(header_text)
+                a.setEnabled(False)
+                m.addSeparator()
+
+            busy = self._sync_running
+            sync_act = m.addAction(
+                f"Sync to latest ({sel_count})" if sel_count > 1
+                else "Sync to latest")
+            sync_act.setEnabled(not busy)
+            sync_act.triggered.connect(lambda _=False: self._sync_selected())
+
+            if primary and primary.get("project_id"):
+                pid = primary["project_id"]
+                m.addAction(
+                    "Open on Modrinth",
+                    lambda pid=pid: QDesktopServices.openUrl(
+                        QUrl(f"https://modrinth.com/"
+                             f"{KIND_PROJECT_TYPE[self.kind]}/{pid}")))
+
+            m.addSeparator()
+            if primary_path:
+                m.addAction("Reveal in file manager",
+                            lambda p=primary_path: self._reveal(p))
+
+            m.addSeparator()
+            del_act = QAction(
+                f"Delete ({sel_count})" if sel_count > 1 else "Delete", m)
+            del_act.triggered.connect(
+                lambda _=False: self._delete_selected())
+            m.addAction(del_act)
+
+            m.exec(self.list.mapToGlobal(pos))
+        except RuntimeError:
+            pass
+
+    def _reveal(self, path):
+        try:
+            if self._deleted:
+                return
+            p = Path(path)
+            folder = p.parent
+            if IS_WIN:
+                subprocess.Popen(["explorer", "/select,", str(p)])
+            elif IS_MAC:
+                subprocess.Popen(["open", "-R", str(p)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except Exception as e:
+            try:
+                self.log_fn("error", f"reveal failed: {e}")
+            except Exception:
+                pass
+
+    # ---- Icons -----------------------------------------------------------
+
+    def _on_icon_ready(self, project_id, icon):
+        try:
+            if self._deleted:
+                return
+            pm = square_icon(icon, ICON_SIZE_ROW)
+            if pm is None:
+                return
+            for path, entry in self._mods.items():
+                if entry.get("project_id") == project_id:
+                    entry["icon_pixmap"] = pm
+                    row = self._rows.get(path)
+                    if row is not None and hasattr(row, "_icon"):
+                        row._icon.setPixmap(pm)
+        except RuntimeError:
+            pass
+
+    # ---- Rendering + culling ---------------------------------------------
+
+    def _update_summary(self):
+        try:
+            if self._deleted:
+                return
+            lbl = self._summary_lbl
+            if lbl is None:
+                return
+            total = len(self._mods)
+            if total == 0:
+                lbl.setText(
+                    f"No {self.label}s installed in this instance.")
+                return
+            counts = {}
+            for m in self._mods.values():
+                counts[m["status"]] = counts.get(m["status"], 0) + 1
+            parts = [f"{total} {self.label}(s)"]
+            if counts.get("update-available"):
+                parts.append(f"{counts['update-available']} update(s)")
+            if counts.get("up-to-date"):
+                parts.append(f"{counts['up-to-date']} up-to-date")
+            if counts.get("unchecked"):
+                parts.append(f"{counts['unchecked']} unchecked")
+            if counts.get("not-on-modrinth"):
+                parts.append(f"{counts['not-on-modrinth']} not on Modrinth")
+            if counts.get("error"):
+                parts.append(f"{counts['error']} error(s)")
+            lbl.setText("  ·  ".join(parts))
+        except RuntimeError:
+            pass
+
+    def _sorted_paths(self):
+        return sorted(self._mods.keys(),
+                      key=lambda p: self._mods[p]["filename"].lower())
+
+    def _queue_rerender(self):
+        try:
+            if self._deleted:
+                return
+            if self._pending_rerender:
+                return
+            self._pending_rerender = True
+            QTimer.singleShot(0, self._do_rerender)
+        except RuntimeError:
+            pass
+
+    def _do_rerender(self):
+        try:
+            if self._deleted:
+                return
+            self._pending_rerender = False
+            self._rerender()
+        except RuntimeError:
+            pass
+
+    def _rerender(self):
+        try:
+            if self._deleted:
+                return
+            self.list.clear()
+            self._rows.clear()
+            paths = self._sorted_paths()
+            self.list.setUpdatesEnabled(False)
+            try:
+                for path in paths:
+                    it = QListWidgetItem()
+                    it.setSizeHint(QSize(0, self.ROW_HEIGHT))
+                    it.setData(Qt.ItemDataRole.UserRole, path)
+                    self.list.addItem(it)
+            finally:
+                self.list.setUpdatesEnabled(True)
+            QTimer.singleShot(0, self._cull_visible)
+        except RuntimeError:
+            pass
+
+    def _cull_visible(self, *_):
+        try:
+            if self._deleted:
+                return
+            if not self.list.count():
+                return
+            vp = self.list.viewport().rect()
+            if vp.height() <= 0:
+                QTimer.singleShot(30, self._cull_visible)
+                return
+            first = self.list.indexAt(vp.topLeft()).row()
+            last = self.list.indexAt(vp.bottomLeft()).row()
+            if first < 0:
+                first = 0
+            if last < 0:
+                last = self.list.count() - 1
+            first = max(0, first - 1)
+            last = min(self.list.count() - 1, last + 1)
+
+            paths = self._sorted_paths()
+            for path in list(self._rows.keys()):
+                try:
+                    idx = paths.index(path)
+                except ValueError:
+                    continue
+                if idx < first or idx > last:
+                    it = self.list.item(idx)
+                    if it is not None:
+                        self.list.removeItemWidget(it)
+                    w = self._rows.pop(path, None)
+                    if w is not None:
+                        w.deleteLater()
+
+            for idx in range(first, last + 1):
+                path = paths[idx]
+                if path in self._rows:
+                    continue
+                entry = self._mods[path]
+                row = self._make_row(path, entry)
+                it = self.list.item(idx)
+                if it is not None:
+                    self.list.setItemWidget(it, row)
+                    self._rows[path] = row
+        except RuntimeError:
+            pass
+
+    def _make_row(self, path, entry):
+        row = QWidget()
+        row.setStyleSheet(
+            f"QWidget{{background:transparent;border:none;"
+            f"border-bottom:1px solid {theme.BG};}}")
+        h = QHBoxLayout(row)
+        h.setContentsMargins(8, 4, 8, 4)
+        h.setSpacing(10)
+
+        ic = QLabel()
+        ic.setFixedSize(ICON_SIZE_ROW, ICON_SIZE_ROW)
+        ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cached = entry.get("icon_pixmap")
+        if cached is not None and not cached.isNull():
+            ic.setPixmap(cached)
+        else:
+            ph = make_placeholder(ICON_SIZE_ROW).pixmap(
+                ICON_SIZE_ROW, ICON_SIZE_ROW)
+            ic.setPixmap(square_icon_pixmap(ph, ICON_SIZE_ROW))
+
+        ic_host = QWidget()
+        ic_host.setStyleSheet("background:transparent;border:none")
+        ic_host.setFixedWidth(ICON_SIZE_ROW)
+        ic_col = QVBoxLayout(ic_host)
+        ic_col.setContentsMargins(0, 0, 0, 0)
+        ic_col.setSpacing(0)
+        ic_col.addStretch(1)
+        ic_col.addWidget(ic, 0, Qt.AlignmentFlag.AlignHCenter)
+        ic_col.addStretch(1)
+        h.addWidget(ic_host, 0)
+        row._icon = ic
+
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        title = QLabel(entry["title"] or entry["filename"])
+        title.setStyleSheet(
+            f"color:{theme.FG};font-weight:bold;font-size:10pt;"
+            f"background:transparent")
+        col.addWidget(title)
+
+        ver = entry["current_ver"] or ""
+        if entry["status"] == "update-available" and entry["latest_ver"]:
+            if ver:
+                sub_text = (f"{entry['filename']}  ·  {ver} → "
+                            f"{entry['latest_ver']} available")
+            else:
+                sub_text = (f"{entry['filename']}  ·  "
+                            f"{entry['latest_ver']} available")
+        elif entry["status"] == "up-to-date":
+            if ver:
+                sub_text = f"{entry['filename']}  ·  {ver}  ·  up to date"
+            else:
+                sub_text = f"{entry['filename']}  ·  up to date"
+        elif entry["status"] == "checking":
+            sub_text = f"{entry['filename']}  ·  checking…"
+        elif entry["status"] == "not-on-modrinth":
+            sub_text = f"{entry['filename']}  ·  not on Modrinth"
+        elif entry["status"] == "error":
+            sub_text = f"{entry['filename']}  ·  error while checking"
+        elif entry["status"] == "no-update-available":
+            sub_text = f"{entry['filename']}  ·  no compatible version"
+        else:
+            sub_text = f"{entry['filename']}  ·  unchecked"
+        sub = QLabel(sub_text)
+        sub.setStyleSheet(
+            f"color:{theme.GRAY};font-size:9pt;background:transparent")
+        col.addWidget(sub)
+        h.addLayout(col, 1)
+
+        badge_text, badge_color = {
+            "update-available":  ("Update available", theme.YELLOW),
+            "up-to-date":        ("Up to date", theme.GREEN),
+            "checking":          ("Checking…", theme.GRAY),
+            "not-on-modrinth":   ("Not on Modrinth", theme.GRAY),
+            "no-update-available": ("No compatible version", theme.GRAY),
+            "error":             ("Error", theme.RED),
+        }.get(entry["status"], ("Unchecked", theme.GRAY))
+        if badge_text:
+            badge = QLabel(badge_text)
+            badge.setStyleSheet(
+                f"color:{badge_color};font-size:8pt;font-weight:bold;"
+                f"background:transparent")
+            h.addWidget(badge)
+
+        return row
